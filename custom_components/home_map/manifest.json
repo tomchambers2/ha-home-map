@@ -7,6 +7,6 @@
   "codeowners": ["@tomchambers2"],
   "config_flow": true,
   "iot_class": "local_push",
-  "dependencies": ["frontend"],
+  "dependencies": ["frontend", "http"],
   "requirements": []
 }
