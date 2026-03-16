@@ -1,0 +1,12 @@
+{
+  "domain": "home_map",
+  "name": "Home Map",
+  "version": "0.1.0",
+  "documentation": "https://github.com/tomchambers2/ha-home-map",
+  "issue_tracker": "https://github.com/tomchambers2/ha-home-map/issues",
+  "codeowners": ["@tomchambers2"],
+  "config_flow": true,
+  "iot_class": "local_push",
+  "dependencies": ["frontend"],
+  "requirements": []
+}
