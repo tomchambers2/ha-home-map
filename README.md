@@ -54,4 +54,11 @@ After installation, "Home Map" appears in your sidebar. The panel auto-generates
 
 ## Screenshots
 
-*Coming soon*
+### Ground floor with temperature heatmap
+![Ground floor](screenshots/ground-floor.png)
+
+### First floor
+![First floor](screenshots/first-floor.png)
+
+### Edit mode
+![Edit mode](screenshots/edit-mode.png)
