@@ -10,8 +10,8 @@ const C = {
   text:"#DFDFEA", textMid:"#BAC0CA", textMuted:"#7A86A4",
   accent:"#7B61FF", accentDim:"rgba(123,97,255,.25)",
   amber:"#E5A620", coral:"#FF6B4A", green:"#4CAF50",
-  wallStroke:"rgba(186,192,202,.22)", wallStrokeSel:"rgba(123,97,255,.7)",
-  roomFill:"rgba(186,192,202,.03)",
+  wallStroke:"rgba(186,192,202,.38)", wallStrokeSel:"rgba(123,97,255,.7)",
+  roomFill:"rgba(186,192,202,.055)",
   font:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif",
 };
 
@@ -230,7 +230,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 .sidebar button{padding:10px 16px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;background:${C.accentDim};color:${C.accent};border:1px solid rgba(123,97,255,.3);margin-top:8px;font-family:${C.font}}
 .sidebar button.danger{background:rgba(255,107,74,.15);color:${C.coral};border:1px solid rgba(255,107,74,.3)}
 .sidebar .fe{margin-top:16px;padding-top:12px;border-top:1px solid ${C.border}}
-.legend{position:absolute;bottom:12px;left:12px;display:flex;align-items:center;gap:8px;background:rgba(6,6,8,.85);padding:8px 12px;border-radius:6px;font-size:12px;color:${C.textMid};border:1px solid ${C.border};pointer-events:none}
+.legend{position:absolute;bottom:12px;left:12px;display:flex;align-items:center;gap:8px;background:rgba(10,10,14,.85);backdrop-filter:blur(8px);padding:8px 14px;border-radius:999px;font-size:12px;color:${C.textMid};border:1px solid ${C.border};pointer-events:none}
 .legend canvas{border-radius:2px}
 .people-bar{position:absolute;top:12px;right:20px;display:flex;gap:12px;pointer-events:none}
 .person-badge{display:flex;flex-direction:column;align-items:center;gap:2px}
@@ -388,11 +388,11 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     if(isSel){ctx.save();ctx.shadowColor="rgba(123,97,255,.35)";ctx.shadowBlur=20}
     ctx.fillStyle=isMerge?"rgba(229,166,32,.06)":C.roomFill;
     ctx.strokeStyle=isSel?C.wallStrokeSel:isMerge?"rgba(229,166,32,.5)":C.wallStroke;
-    ctx.lineWidth=isSel?1.5:1;
-    for(const r of rmRects(rm)){const[sx,sy]=this._toScreen(r.x,r.y);ctx.fillRect(sx,sy,r.w*this._scale,r.h*this._scale);ctx.strokeRect(sx,sy,r.w*this._scale,r.h*this._scale)}
+    ctx.lineWidth=isSel?2:1.5;ctx.lineJoin="round";
+    for(const r of rmRects(rm)){const[sx,sy]=this._toScreen(r.x,r.y);const rw=r.w*this._scale,rh=r.h*this._scale;const g=ctx.createLinearGradient(0,sy,0,sy+rh);g.addColorStop(0,isMerge?"rgba(229,166,32,.09)":"rgba(186,192,202,.08)");g.addColorStop(1,isMerge?"rgba(229,166,32,.03)":"rgba(186,192,202,.025)");ctx.fillStyle=g;ctx.fillRect(sx,sy,rw,rh);ctx.strokeRect(sx,sy,rw,rh)}
     if(isSel)ctx.restore()}}
 
-  _drawLabels(ctx,f){ctx.textAlign="center";ctx.textBaseline="middle";for(const rm of f.rooms){const b=rmBounds(rm);const[cx,cy]=this._toScreen(b.x+b.w/2,b.y+b.h/2);const fs=Math.max(13,Math.min(20,b.w*this._scale*.12));ctx.font=`600 ${fs}px ${C.font}`;ctx.save();ctx.shadowColor="rgba(0,0,0,.6)";ctx.shadowBlur=4;ctx.fillStyle=C.text;ctx.fillText(rm.name||"?",cx,cy,b.w*this._scale-12);ctx.restore()}}
+  _drawLabels(ctx,f){ctx.textAlign="center";ctx.textBaseline="middle";for(const rm of f.rooms){const b=rmBounds(rm);const big=rmRects(rm).reduce((m,r)=>r.w*r.h>m.w*m.h?r:m);const[cx,cy0]=this._toScreen(big.x+big.w/2,big.y);const cy=cy0+16;const fs=Math.max(11,Math.min(15,b.w*this._scale*.09));ctx.font=`600 ${fs}px ${C.font}`;ctx.save();ctx.letterSpacing="1.5px";ctx.shadowColor="rgba(0,0,0,.8)";ctx.shadowBlur=6;ctx.fillStyle=C.textMid;ctx.fillText((rm.name||"?").toUpperCase(),cx,cy,big.w*this._scale-12);ctx.restore()}}
 
   _drawDimensions(ctx,f){ctx.textAlign="center";ctx.textBaseline="bottom";ctx.font=`500 13px ${C.font}`;ctx.fillStyle=C.textMuted;for(const rm of f.rooms){for(const r of rmRects(rm)){const wm=(r.w/this._upm).toFixed(1),hm=(r.h/this._upm).toFixed(1);const[cx,cy]=this._toScreen(r.x+r.w/2,r.y+r.h);ctx.fillText(`${wm} \u00d7 ${hm}m`,cx,cy-4)}}}
 
@@ -470,7 +470,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
           val=wV/wS;
         }
         const[r,g,b]=fn(val);
-        const idx=(py*w+px)*4;d[idx]=r;d[idx+1]=g;d[idx+2]=b;d[idx+3]=150;
+        const idx=(py*w+px)*4;d[idx]=r;d[idx+1]=g;d[idx+2]=b;d[idx+3]=125;
       }
     }
     oc.putImageData(img,0,0);ctx.save();ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
@@ -488,8 +488,8 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
       const text=`${parseFloat(s.state).toFixed(1)}${unit}`;const tw=ctx.measureText(text).width+14;
       const ph=22,pr=11;
-      ctx.fillStyle="rgba(6,6,8,.8)";ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.fill();
-      ctx.strokeStyle="rgba(186,192,202,.12)";ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.stroke();
+      ctx.save();ctx.shadowColor="rgba(0,0,0,.5)";ctx.shadowBlur=8;ctx.shadowOffsetY=2;ctx.fillStyle="rgba(10,10,14,.88)";ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.fill();ctx.restore();
+      ctx.strokeStyle="rgba(186,192,202,.2)";ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.stroke();
       ctx.fillStyle=accent;ctx.fillText(text,cx,cy);
     }
   }
