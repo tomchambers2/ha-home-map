@@ -33,11 +33,11 @@ const LAYERS = [
   { id: "temperature", label: "Temperature" }, { id: "humidity", label: "Humidity" },
   { id: "air_quality", label: "Air Quality" },
   { id: "occupancy", label: "People" }, { id: "windows", label: "Windows" },
-  { id: "lights", label: "Lights" }, { id: "heating", label: "Heating" },
+  { id: "lights", label: "Lights" }, { id: "plugs", label: "Plugs" }, { id: "heating", label: "Heating" }, { id: "solar", label: "Solar" },
 ];
 const HEATMAP_LAYERS = new Set(["temperature","humidity","air_quality"]);
 const SENSOR_CLASSES = { temperature: ["temperature"], humidity: ["humidity"], air_quality: ["aqi","volatile_organic_compounds","pm25","pm10","pm1","carbon_dioxide"], occupancy: ["occupancy","motion","presence"] };
-const ELEM_COL = { temperature:"#E5A620", humidity:"#2196f3", air_quality:"#9c27b0", occupancy:"#4caf50", lights:"#fdd835", climate:"#f44336", windows:"#7B61FF", radar:"#00E676" };
+const ELEM_COL = { temperature:"#E5A620", humidity:"#2196f3", air_quality:"#9c27b0", occupancy:"#4caf50", lights:"#fdd835", plugs:"#26C6DA", climate:"#f44336", windows:"#7B61FF", radar:"#00E676" };
 
 /* ── colour helpers ─────────────────────────────────────── */
 function hslToRgb(h,s,l){h/=360;s/=100;l/=100;let r,g,b;if(s===0){r=g=b=l}else{const q2r=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};const q=l<.5?l*(1+s):l+s-l*s;const p=2*l-q;r=q2r(p,q,h+1/3);g=q2r(p,q,h);b=q2r(p,q,h-1/3)}return[Math.round(r*255),Math.round(g*255),Math.round(b*255)]}
@@ -63,7 +63,7 @@ const AQ_METRICS={
   pm10:  {label:"PM10",  unit:"\u00b5g/m\u00b3", min:0, max:300, stops:AQ_GOOD_BAD, dc:["pm10"]},
   pm1:   {label:"PM1",   unit:"\u00b5g/m\u00b3", min:0, max:100, stops:AQ_GOOD_BAD, dc:["pm1"]},
   co2:   {label:"CO\u2082",unit:"ppm", min:400, max:2000, stops:[[0,76,175,80],[.2,120,200,80],[.4,200,200,60],[.6,230,160,40],[.8,230,100,30],[1,190,40,30]], dc:["carbon_dioxide"]},
-  voc:   {label:"VOC",   unit:"",     min:0, max:500, stops:[[0,76,175,80],[.2,160,200,60],[.4,230,180,40],[.6,230,120,30],[.8,200,50,30],[1,140,30,140]], dc:["aqi","volatile_organic_compounds"]},
+  voc:   {label:"VOC",   unit:"",     min:0, max:500, stops:[[0,76,175,80],[.2,160,200,60],[.4,230,180,40],[.6,230,120,30],[.8,200,50,30],[1,140,30,140]], dc:["aqi","volatile_organic_compounds"], re:/_sen55_voc$/},
 };
 function tempToRgb(v,mn,mx){return lerpStops((v-(mn!=null?mn:TEMP_MIN))/((mx!=null?mx:TEMP_MAX)-(mn!=null?mn:TEMP_MIN)),TEMP_STOPS)}
 function humToRgb(v,mn,mx){return lerpStops((v-(mn!=null?mn:HUM_MIN))/((mx!=null?mx:HUM_MAX)-(mn!=null?mn:HUM_MIN)),HUM_STOPS)}
@@ -81,8 +81,41 @@ function rmBounds(rm){
   for(const r of rs){x0=Math.min(x0,r.x);y0=Math.min(y0,r.y);x1=Math.max(x1,r.x+r.w);y1=Math.max(y1,r.y+r.h)}
   return{x:x0,y:y0,w:x1-x0,h:y1-y0};
 }
+/* Outer boundary of a multi-block room: every block edge minus the stretches shared with another block of the same room. Each edge carries its outward normal (nx,ny). */
+function rmOuterEdges(rm){
+  const rs=rmRects(rm);const out=[];
+  const cover=(lo,hi,ivs)=>{ // subtract intervals from [lo,hi]
+    let segs=[[lo,hi]];
+    for(const[a,b]of ivs){const n=[];for(const[p,q]of segs){if(b<=p||a>=q){n.push([p,q]);continue}if(a>p)n.push([p,a]);if(b<q)n.push([b,q])}segs=n}
+    return segs.filter(([p,q])=>q-p>0.01)};
+  rs.forEach((r,i)=>{
+    const others=rs.filter((_,j)=>j!==i);
+    // top (normal -y), bottom (+y): shared if another block touches that line and overlaps in x
+    for(const[y,ny]of[[r.y,-1],[r.y+r.h,1]]){
+      const iv=others.filter(o=>(ny===-1?o.y+o.h:o.y)===y).map(o=>[o.x,o.x+o.w]);
+      for(const[a,b]of cover(r.x,r.x+r.w,iv))out.push({x0:a,y0:y,x1:b,y1:y,nx:0,ny});
+    }
+    for(const[x,nx]of[[r.x,-1],[r.x+r.w,1]]){
+      const iv=others.filter(o=>(nx===-1?o.x+o.w:o.x)===x).map(o=>[o.y,o.y+o.h]);
+      for(const[a,b]of cover(r.y,r.y+r.h,iv))out.push({x0:x,y0:a,x1:x,y1:b,nx,ny:0});
+    }
+  });
+  return out;
+}
 function ptInRoom(wx,wy,rm){for(const r of rmRects(rm))if(wx>=r.x&&wx<=r.x+r.w&&wy>=r.y&&wy<=r.y+r.h)return true;return false}
 function ptInRect(wx,wy,r){return wx>=r.x&&wx<=r.x+r.w&&wy>=r.y&&wy<=r.y+r.h}
+
+/* Smart plugs and the HA area each lives in; placed at default positions the first time the map loads. */
+const PLUG_SEED=[
+  ["switch.0xa4c13801d1feffff","living_room"],["switch.living_room_lamp_small","living_room"],
+  ["switch.0xa4c13802ac57ffff","conservatory"],
+  ["switch.washing_machine_plug","kitchen"],["switch.dishwasher","kitchen"],["switch.0xa4c1380fd119ffff","kitchen"],["switch.fridge_freezer","kitchen"],
+  ["switch.home_assistant_plug","hallway"],
+  ["switch.bedroom_dehumidifier","bedroom"],["switch.office_power_strip","bedroom"],
+  ["switch.eve_energy_20ebt8601","office"],
+  ["switch.meross_office_outlet_1","office_tom"],["switch.meross_office_outlet_2","office_tom"],["switch.meross_office_outlet_3","office_tom"],["switch.meross_office_outlet_4","office_tom"],["switch.meross_office_outlet_5","office_tom"],["switch.meross_office_usb","office_tom"],["switch.meross_office_air_purifier","office_tom"],["switch.office_tom_eve_energy_plug_unassigned","office_tom"],
+];
+const SOLAR={pv:"sensor.sigen_plant_pv_power",soc:"sensor.sigen_plant_battery_state_of_charge",batt:"sensor.sigen_plant_battery_power",imp:"sensor.sigen_plant_grid_import_power",exp:"sensor.sigen_plant_grid_export_power",load:"sensor.sigen_plant_consumed_power"};
 
 /* ── missing entity indicator ──────────────────────────── */
 function drawMissingEntity(ctx, cx, cy) {
@@ -129,6 +162,12 @@ function drawIcon(ctx, type, cx, cy, sz, active) {
       ctx.strokeStyle = c; ctx.lineWidth = 2;
       for(let i=0;i<8;i++){const a=i*Math.PI/4;ctx.beginPath();ctx.moveTo(Math.cos(a)*sz*.38,Math.sin(a)*sz*.38);ctx.lineTo(Math.cos(a)*sz*.55,Math.sin(a)*sz*.55);ctx.stroke()}
       break;
+    case "plugs": // socket with two pins
+      ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.roundRect(-sz*.38, -sz*.38, sz*.76, sz*.76, sz*.18); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-sz*.13, -sz*.14); ctx.lineTo(-sz*.13, sz*.02); ctx.moveTo(sz*.13, -sz*.14); ctx.lineTo(sz*.13, sz*.02); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, sz*.17, sz*.07, 0, Math.PI*2); ctx.fillStyle = c; ctx.fill();
+      break;
     case "climate": // radiator
       ctx.fillStyle = c;
       ctx.fillRect(-sz*.45, -sz*.3, sz*.9, sz*.6);
@@ -162,7 +201,7 @@ class HomeMapPanel extends HTMLElement {
   constructor() {
     super(); this.attachShadow({mode:"open"});
     this._hass=null; this._floors=[]; this._floorIdx=0; this._upm=DEFAULT_UPM;
-    this._layers={temperature:true,humidity:false,air_quality:false,occupancy:true,windows:true,lights:true,heating:false};
+    this._layers={temperature:true,humidity:false,air_quality:false,occupancy:true,windows:true,lights:true,plugs:true,heating:false,solar:true};
     this._aqMetric="pm25";
     this._editMode=false; this._view3d=false; this._selRoom=null; this._selRect=0; this._selElem=null; this._addingSection=false; this._mergeSet=new Set();
     this._action=null; this._actionData={};
@@ -185,16 +224,18 @@ class HomeMapPanel extends HTMLElement {
       else{this._hmCache=null;this._refreshTabs();this._renderSidebar();this._scheduleRender()}
     }
     if(this._sc(p,h)){this._hmCache=null;this._scheduleRender()}}
-  _sc(a,b){if(!a)return true;const f=this._floor();if(!f)return false;for(const rm of f.rooms){for(const k of["temperature","humidity","occupancy"])for(const el of(rm.sensors?.[k]||[]))if(el.entity_id&&a.states[el.entity_id]?.state!==b.states[el.entity_id]?.state)return true;for(const el of(rm.sensors?.air_quality||[])){const eid=this._resolveAqEntity(el);if(eid&&a.states[eid]?.state!==b.states[eid]?.state)return true}for(const k of["lights","climate","windows"])for(const el of(rm[k]||[])){if(!el.entity_id)continue;const ea=a.states[el.entity_id],eb=b.states[el.entity_id];if(ea?.state!==eb?.state)return true;if(k==="lights"&&(ea?.attributes?.brightness!==eb?.attributes?.brightness||ea?.attributes?.color_temp!==eb?.attributes?.color_temp||(ea?.attributes?.rgb_color||[]).join()!==(eb?.attributes?.rgb_color||[]).join()))return true}for(const rd of(rm.radar||[]))for(let t=1;t<=(rd.max_targets||3);t++)for(const s of["x","y","direction"]){const eid=`sensor.${rd.entity_prefix}_target_${t}_${s}`;if(a.states[eid]?.state!==b.states[eid]?.state)return true}}return false}
+  _sc(a,b){if(!a)return true;const f=this._floor();if(!f)return false;for(const rm of f.rooms){for(const k of["temperature","humidity","occupancy"])for(const el of(rm.sensors?.[k]||[]))if(el.entity_id&&a.states[el.entity_id]?.state!==b.states[el.entity_id]?.state)return true;for(const el of(rm.sensors?.air_quality||[])){const eid=this._resolveAqEntity(el);if(eid&&a.states[eid]?.state!==b.states[eid]?.state)return true}for(const k of["lights","plugs","climate","windows"])for(const el of(rm[k]||[])){if(!el.entity_id)continue;const ea=a.states[el.entity_id],eb=b.states[el.entity_id];if(ea?.state!==eb?.state)return true;if(k==="lights"&&(ea?.attributes?.brightness!==eb?.attributes?.brightness||ea?.attributes?.color_temp!==eb?.attributes?.color_temp||(ea?.attributes?.rgb_color||[]).join()!==(eb?.attributes?.rgb_color||[]).join()))return true}for(const rd of(rm.radar||[]))for(let t=1;t<=(rd.max_targets||3);t++)for(const s of["x","y","direction"]){const eid=`sensor.${rd.entity_prefix}_target_${t}_${s}`;if(a.states[eid]?.state!==b.states[eid]?.state)return true}}return false}
 
   /* ── data ─────────────────────────────────────────────── */
   async _loadData(){
+    this._aqCache=null;
     try{this._areas=await this._hass.callWS({type:"config/area_registry/list"});this._entityReg=await this._hass.callWS({type:"config/entity_registry/list"});this._deviceReg=await this._hass.callWS({type:"config/device_registry/list"})}catch{}
     let has=false;
-    try{const r=await this._hass.callApi("GET","home_map/floor_plan");if(r?.floors?.length){this._floors=r.floors;this._upm=r.unitsPerMeter||DEFAULT_UPM;this._migrate();has=true}}catch{}
+    try{const r=await this._hass.callApi("GET","home_map/floor_plan");if(r?.floors?.length){this._floors=r.floors;this._upm=r.unitsPerMeter||DEFAULT_UPM;this._mig=r.migrations||{};this._migrate();has=true}}catch{}
     if(!has){await this._autoGen();this._debounceSave()}
     // Sync floor structure with HA (moves rooms between floors, reorders)
     await this._syncFloors();
+    this._seed();
     this._refreshTabs();this._scheduleRender();
   }
   async _syncFloors(){
@@ -249,7 +290,35 @@ class HomeMapPanel extends HTMLElement {
     // Migrate to rects array
     if(!rm.rects){rm.rects=[{x:rm.x,y:rm.y,w:rm.w,h:rm.h}];c=true}
     if(!rm.sensors)rm.sensors={};for(const k of["temperature","humidity","air_quality","occupancy"]){const v=rm.sensors[k];if(typeof v==="string"){rm.sensors[k]=v?[{entity_id:v,x:.5,y:.5}]:[];c=true}else if(!Array.isArray(v))rm.sensors[k]=[]}for(const k of["lights","climate","windows"]){if(!rm[k]){rm[k]=[];continue}if(rm[k].length>0&&typeof rm[k][0]==="string"){const dy=k==="windows"?0:k==="climate"?.95:.3;rm[k]=rm[k].map((eid,i,a)=>({entity_id:eid,x:(i+1)/(a.length+1),y:dy}));c=true}}
-    if(!rm.radar){rm.radar=[];c=true}}if(c)this._debounceSave()}
+    if(!rm.radar){rm.radar=[];c=true}
+    if(!rm.plugs){rm.plugs=[];c=true}}if(c)this._debounceSave()}
+  /* One-off data seeds. Each runs once (flag stored in the floor plan) so deleting a seeded item sticks. */
+  _seed(){
+    const m=this._mig||(this._mig={});let changed=false;const st=this._hass.states;
+    const roomByArea=a=>{for(const f of this._floors)for(const rm of f.rooms)if(rm.area_id===a)return rm;return null};
+    if(!m.bathroom_temp){
+      const rm=roomByArea("bathroom");
+      if(!rm)console.error("home-map seed: no Bathroom room");
+      else for(const[k,eid]of[["temperature","sensor.bathroom_temp_humidity_temperature"],["humidity","sensor.bathroom_temp_humidity_humidity"]]){
+        if(!st[eid]){console.error("home-map seed: missing",eid);continue}
+        if(!rm.sensors[k].some(e=>e.entity_id===eid))rm.sensors[k].push({entity_id:eid,x:k==="temperature"?.76:.76,y:k==="temperature"?.5:.7});
+      }
+      if(rm)m.bathroom_temp=true;changed=true;
+    }
+    if(!m.plugs_seeded){
+      const groups={};let ok=true;
+      for(const[eid,area]of PLUG_SEED){
+        if(!st[eid]){console.error("home-map seed: missing plug",eid);continue}
+        const rm=roomByArea(area);if(!rm){console.error("home-map seed: no room for area",area,eid);ok=false;continue}
+        (groups[rm.id]||(groups[rm.id]={rm,list:[]})).list.push(eid);
+      }
+      for(const{rm,list}of Object.values(groups)){
+        list.forEach((eid,i)=>{if(!rm.plugs.some(e=>e.entity_id===eid))rm.plugs.push({entity_id:eid,x:(i+1)/(list.length+1),y:.12})});
+      }
+      if(ok)m.plugs_seeded=true;changed=true;
+    }
+    if(changed)this._debounceSave();
+  }
   async _autoGen(){
     let hf=[];try{hf=await this._hass.callWS({type:"config/floor_registry/list"})}catch{}
     hf.sort((a,b)=>(a.level||0)-(b.level||0));
@@ -259,7 +328,7 @@ class HomeMapPanel extends HTMLElement {
     if(!this._floors.length)this._floors=[{id:uid(),name:"Ground Floor",rooms:this._layRooms(this._areas||[])}];
   }
   _layRooms(areas){const rooms=[],cols=Math.ceil(Math.sqrt(areas.length)),W=200,H=160,g=10;for(let i=0;i<areas.length;i++){const rx=(i%cols)*(W+g),ry=Math.floor(i/cols)*(H+g);rooms.push({id:uid(),name:areas[i].name,rects:[{x:rx,y:ry,w:W,h:H}],area_id:areas[i].area_id,sensors:{temperature:[],humidity:[],air_quality:[],occupancy:[]},lights:[],climate:[],windows:[],radar:[]})}return rooms}
-  async _save(){try{await this._hass.callApi("POST","home_map/floor_plan",{floors:this._floors,unitsPerMeter:this._upm})}catch(e){console.error("save fail",e)}}
+  async _save(){try{await this._hass.callApi("POST","home_map/floor_plan",{floors:this._floors,unitsPerMeter:this._upm,migrations:this._mig||{}})}catch(e){console.error("save fail",e)}}
   _debounceSave(){clearTimeout(this._saveTimer);this._saveTimer=setTimeout(()=>this._save(),400)}
   _floor(){return this._floors[this._floorIdx]||null}
 
@@ -384,7 +453,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
         // If an element is selected, delete that element, not the room
         if(this._selElem){
           const rm=this._selRoom;
-          const arr=["temperature","humidity","occupancy"].includes(this._selElem.type)?rm.sensors[this._selElem.type]:rm[this._selElem.type];
+          const arr=["temperature","humidity","air_quality","occupancy"].includes(this._selElem.type)?rm.sensors[this._selElem.type]:rm[this._selElem.type];
           if(arr&&this._selElem.index<arr.length){
             arr.splice(this._selElem.index,1);
             this._selElem=null;this._hmCache=null;
@@ -469,44 +538,125 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   }
   _iso3(wx,wy,wz){const s=this._scale3d;return[(wx-wy)*.866*s+this._panX3d,(wx+wy)*.5*s-wz*s+this._panY3d]}
   _shade(rgba,amt){const m=rgba.match(/rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)/);if(!m)return rgba;const f=v=>Math.max(0,Math.min(255,Math.round(+v+255*amt)));return`rgba(${f(m[1])},${f(m[2])},${f(m[3])},${m[4]??1})`}
+  _shadeA(rgba,amt,a){const m=rgba.match(/rgba?\((\d+),(\d+),(\d+)/);if(!m)return rgba;const f=v=>Math.max(0,Math.min(255,Math.round(+v+255*amt)));return`rgba(${f(m[1])},${f(m[2])},${f(m[3])},${a})`}
+  /* The 3D view is a cut-away: low walls so everything inside stays visible. Every 2D layer is drawn here too. */
   _draw3D(ctx,f){
-    this._autoFit3D(f);
-    const H=2.4*this._upm;
-    const aT=this._layers.temperature,aH=this._layers.humidity;
-    ctx.font=`600 13px ${C.font}`;ctx.textAlign="center";ctx.textBaseline="middle";
-    const poly=(pts,fill)=>{ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=C.wallStroke;ctx.lineWidth=1;ctx.stroke()};
-    // Painter's algorithm: rooms further "back" (smaller x+y) first
+    this._autoFit3D(f);this._hits3d=[];
+    const WH=.55*this._upm,L=this._layers;
     const rooms=[...f.rooms].sort((a,b)=>{const ba=rmBounds(a),bb=rmBounds(b);return(ba.x+ba.w/2+ba.y+ba.h/2)-(bb.x+bb.w/2+bb.y+bb.h/2)});
+    const poly=(pts,fill,stroke)=>{ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke()}};
+    // which heat layer colours the floors
+    const hType=L.temperature?"temperature":L.humidity?"humidity":L.air_quality?"air_quality":null;
+    const aqM=hType==="air_quality"?AQ_METRICS[this._aqMetric]:null;
+    let lo=0,hi=1,colorFn=null;
+    if(hType==="temperature"){lo=0;hi=30;colorFn=v=>tempToRgb(v,lo,hi)}else if(hType==="humidity"){lo=0;hi=100;colorFn=v=>humToRgb(v,lo,hi)}else if(aqM){lo=aqM.min;hi=aqM.max;colorFn=v=>aqToRgb(v,lo,hi,aqM.stops)}
+    this._hmRange=hType?{min:lo,max:hi,type:hType}:null;
+    const sensorVals=(rm,type)=>(rm.sensors?.[type]||[]).map(el=>{const eid=type==="air_quality"?this._resolveAqEntity(el):el.entity_id;const s=eid?this._hass.states[eid]:null;const v=s?parseFloat(s.state):NaN;return{el,eid,v}});
+    const at=(rm,el,z)=>{const[wx,wy]=this._elemWorld(rm,el);return this._iso3(wx,wy,z||0)};
+    // floors
     for(const rm of rooms){
-      let floorFill=C.room3d;
-      if(aT||aH){
-        const type=aT?"temperature":"humidity";
-        const vals=(rm.sensors?.[type]||[]).map(el=>{const s=this._hass.states[el.entity_id];return s?parseFloat(s.state):NaN}).filter(v=>!isNaN(v));
-        if(vals.length){const avg=vals.reduce((a,b)=>a+b,0)/vals.length;const[r,g,b]=type==="temperature"?tempToRgb(avg,0,30):humToRgb(avg,0,100);floorFill=`rgba(${r},${g},${b},.6)`}
-      }
+      let fill=C.room3d;
+      if(colorFn){const vs=sensorVals(rm,hType).map(x=>x.v).filter(v=>!isNaN(v));if(vs.length){const[r,g,b]=colorFn(vs.reduce((a,b)=>a+b,0)/vs.length);fill=`rgba(${r},${g},${b},.6)`}}
+      rm._fill3d=fill;
+      for(const r of rmRects(rm))poly([this._iso3(r.x,r.y,0),this._iso3(r.x+r.w,r.y,0),this._iso3(r.x+r.w,r.y+r.h,0),this._iso3(r.x,r.y+r.h,0)],fill);
+    }
+    for(const rm of rooms){
       const isSel=rm===this._selRoom;
-      for(const r of rmRects(rm)){
-        const x0=r.x,y0=r.y,x1=r.x+r.w,y1=r.y+r.h;
-        const top=[this._iso3(x0,y0,H),this._iso3(x1,y0,H),this._iso3(x1,y1,H),this._iso3(x0,y1,H)];
-        const wallR=[this._iso3(x1,y0,H),this._iso3(x1,y1,H),this._iso3(x1,y1,0),this._iso3(x1,y0,0)];
-        const wallF=[this._iso3(x0,y1,H),this._iso3(x1,y1,H),this._iso3(x1,y1,0),this._iso3(x0,y1,0)];
-        if(isSel){ctx.save();ctx.shadowColor="rgba(123,97,255,.5)";ctx.shadowBlur=18}
-        poly(wallF,this._shade(floorFill,-.25));
-        poly(wallR,this._shade(floorFill,-.42));
-        poly(top,floorFill);
-        if(isSel)ctx.restore();
+      // walls: only the outer boundary, only the two faces that point at the viewer
+      const wallA=C.room3d.includes("94,100")?.92:.95;
+      for(const e of rmOuterEdges(rm)){
+        const a=[this._iso3(e.x0,e.y0,0),this._iso3(e.x1,e.y1,0)],b=[this._iso3(e.x1,e.y1,WH),this._iso3(e.x0,e.y0,WH)];
+        const front=e.ny===1||e.nx===1;
+        if(front){if(isSel){ctx.save();ctx.shadowColor="rgba(123,97,255,.5)";ctx.shadowBlur=14}
+          poly([a[0],a[1],b[0],b[1]],this._shadeA(C.room3d,e.ny===1?-.12:-.22,wallA),C.wallStroke);if(isSel)ctx.restore()}
+        else{ctx.strokeStyle=C.wallStroke;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(a[0][0],a[0][1]);ctx.lineTo(a[1][0],a[1][1]);ctx.stroke()}
       }
-      const b=rmBounds(rm);const[lx,ly]=this._iso3(b.x+b.w/2,b.y+b.h/2,H);
+      const b=rmBounds(rm);const[lx,ly]=this._iso3(b.x+b.w/2,b.y+b.h/2,0);
+      ctx.textAlign="center";ctx.textBaseline="middle";
       ctx.save();ctx.shadowColor="rgba(0,0,0,.6)";ctx.shadowBlur=4;ctx.fillStyle=C.text;ctx.font=`600 13px ${C.font}`;ctx.fillText(rm.name||"?",lx,ly);ctx.restore();
-      for(const el of(rm.lights||[])){const s=this._hass.states[el.entity_id];if(s?.state==="on"){const[wx,wy]=this._elemWorld(rm,el);const[gx,gy]=this._iso3(wx,wy,H);ctx.save();ctx.shadowColor=ELEM_COL.lights;ctx.shadowBlur=10;ctx.fillStyle=ELEM_COL.lights;ctx.beginPath();ctx.arc(gx,gy-16,5,0,Math.PI*2);ctx.fill();ctx.restore()}}
-      if(aT){
-        const sv=(rm.sensors?.temperature||[]).map(el=>this._hass.states[el.entity_id]).find(s=>s&&!isNaN(parseFloat(s.state)));
-        if(sv){const text=`${parseFloat(sv.state).toFixed(1)}°C`;ctx.font=`600 11px ${C.font}`;const tw=ctx.measureText(text).width+14;ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(lx-tw/2,ly+14,tw,18,9);ctx.fill();ctx.fillStyle=C.amber;ctx.fillText(text,lx,ly+23)}
+      // lights: glow on the floor + marker
+      if(L.lights)for(const el of(rm.lights||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        const on=s.state==="on";
+        if(on){const bri=(s.attributes?.brightness||255)/255,rgb=s.attributes?.rgb_color||[255,210,80];const rad=(70+50*bri)*this._scale3d/2;
+          ctx.save();ctx.translate(px,py);ctx.scale(1,.5);const g=ctx.createRadialGradient(0,0,0,0,0,rad);g.addColorStop(0,`rgba(${rgb[0]},${rgb[1]},${rgb[2]},${.3+.4*bri})`);g.addColorStop(1,`rgba(${rgb[0]},${rgb[1]},${rgb[2]},0)`);ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,rad,0,Math.PI*2);ctx.fill();ctx.restore()}
+        this._stem(ctx,px,py);ctx.beginPath();ctx.arc(px,py-14,12,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();ctx.strokeStyle=on?ELEM_COL.lights:C.pillBorder;ctx.lineWidth=on?2:1;ctx.stroke();drawIcon(ctx,"lights",px,py-14,14,on);
+        this._hits3d.push({x:px,y:py-14,el,type:"lights"});
+      }
+      if(L.plugs)for(const el of(rm.plugs||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        this._stem(ctx,px,py);this._plugMarker(ctx,px,py-14,s.state);this._hits3d.push({x:px,y:py-14,el,type:"plugs"});
+      }
+      if(L.heating)for(const el of(rm.climate||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        const active=s.state==="heat"&&s.attributes?.temperature>(s.attributes?.current_temperature||0);
+        if(active){ctx.save();ctx.translate(px,py);ctx.scale(1,.5);const g=ctx.createRadialGradient(0,0,0,0,0,40);g.addColorStop(0,"rgba(255,60,20,.35)");g.addColorStop(1,"rgba(255,60,20,0)");ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,40,0,Math.PI*2);ctx.fill();ctx.restore()}
+        this._stem(ctx,px,py);ctx.beginPath();ctx.arc(px,py-14,13,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();drawIcon(ctx,"climate",px,py-14,16,active);
+        const t=s.attributes?.temperature,c2=s.attributes?.current_temperature;if(t!=null)this._pill(ctx,px,py-36,c2!=null?`${c2}→${t}°`:`→${t}°`,active?C.coral:C.textMuted);
+      }
+      if(L.windows)for(const el of(rm.windows||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        const open=s.state==="on";this._stem(ctx,px,py);ctx.beginPath();ctx.arc(px,py-14,13,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();drawIcon(ctx,"windows",px,py-14,open?18:14,open);
+        if(open)this._pill(ctx,px,py-36,"Open",C.coral);else{ctx.beginPath();ctx.arc(px,py-1,3,0,Math.PI*2);ctx.fillStyle=C.green;ctx.fill()}
+      }
+      // heat-layer values
+      if(hType){const unit=hType==="temperature"?"°C":hType==="humidity"?"%":aqM.unit;const col=hType==="temperature"?C.amber:hType==="humidity"?"#2196f3":"#9c27b0";
+        for(const{el,eid,v}of sensorVals(rm,hType)){const[px,py]=at(rm,el,0);
+          if(eid===null){this._pill(ctx,px,py-12,"n/a",C.textMuted);continue}
+          if(!this._hass.states[eid]){drawMissingEntity(ctx,px,py-12);continue}
+          if(isNaN(v))continue;this._pill(ctx,px,py-12,`${v.toFixed(1)}${unit}`,col)}}
+      // people
+      if(L.occupancy){
+        for(const el of(rm.sensors?.occupancy||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+          if(!s){drawMissingEntity(ctx,px,py-14);continue}
+          this._figure(ctx,px,py,s.state==="on"||parseFloat(s.state)>0)}
+        this._radarTargets(rm,(wx,wy)=>{const[px,py]=this._iso3(wx,wy,0);this._figure(ctx,px,py,true)});
       }
     }
-    ctx.textAlign="center";ctx.textBaseline="middle";ctx.font=`500 12px ${C.font}`;ctx.fillStyle=C.textMuted;
-    ctx.fillText("3D massing view — real photos not yet added",this._cvW/2,this._cvH-20);
+    if(L.solar){this._drawRoof3D(ctx,f);this._drawSolarHud(ctx)}
   }
+  _stem(ctx,px,py){ctx.strokeStyle="rgba(186,192,202,.35)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(px,py-2);ctx.stroke();ctx.fillStyle="rgba(0,0,0,.35)";ctx.beginPath();ctx.ellipse(px,py,7,3.5,0,0,Math.PI*2);ctx.fill()}
+  /* standing person: head + body, green when someone is there */
+  _figure(ctx,px,py,on){
+    const col=on?ELEM_COL.occupancy:"rgba(150,150,150,.5)";
+    ctx.fillStyle="rgba(0,0,0,.3)";ctx.beginPath();ctx.ellipse(px,py,9,4.5,0,0,Math.PI*2);ctx.fill();
+    if(on){ctx.save();ctx.translate(px,py);ctx.scale(1,.5);const g=ctx.createRadialGradient(0,0,0,0,0,28);g.addColorStop(0,"rgba(76,175,80,.35)");g.addColorStop(1,"rgba(76,175,80,0)");ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,28,0,Math.PI*2);ctx.fill();ctx.restore()}
+    const s=on?1:.7;ctx.fillStyle=col;
+    ctx.beginPath();ctx.roundRect(px-5*s,py-22*s,10*s,17*s,5*s);ctx.fill();
+    ctx.beginPath();ctx.arc(px,py-27*s,5*s,0,Math.PI*2);ctx.fill();
+  }
+  /* solar array on the roof of the top floor */
+  _drawRoof3D(ctx,f){
+    if(this._floorIdx!==this._floors.length-1||!f.rooms.length)return;
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;for(const rm of f.rooms){const b=rmBounds(rm);x0=Math.min(x0,b.x);y0=Math.min(y0,b.y);x1=Math.max(x1,b.x+b.w);y1=Math.max(y1,b.y+b.h)}
+    const z=2.4*this._upm,ax=x0+(x1-x0)*.1,ay=y0+(y1-y0)*.08,aw=(x1-x0)*.45,ah=(y1-y0)*.3;
+    const v=this._solarVals();const live=v.pv!=null&&v.pv>0.01;
+    const cols=4,rows=2;
+    for(let i=0;i<cols;i++)for(let j=0;j<rows;j++){
+      const cx0=ax+aw*i/cols+2,cy0=ay+ah*j/rows+2,cw=aw/cols-4,ch=ah/rows-4;
+      ctx.beginPath();[[cx0,cy0],[cx0+cw,cy0],[cx0+cw,cy0+ch],[cx0,cy0+ch]].forEach(([x,y],k)=>{const[px,py]=this._iso3(x,y,z);k?ctx.lineTo(px,py):ctx.moveTo(px,py)});ctx.closePath();
+      ctx.fillStyle=live?"rgba(60,110,200,.9)":"rgba(40,60,110,.85)";ctx.fill();ctx.strokeStyle="rgba(190,200,220,.6)";ctx.lineWidth=1;ctx.stroke();
+    }
+    const[cx,cy]=this._iso3(ax+aw/2,ay+ah/2,z);
+    this._pill(ctx,cx,cy-22,v.pv==null?"Solar –":`Solar ${v.pv.toFixed(2)} kW`,live?ELEM_COL.lights:C.textMuted);
+  }
+  /* radar target positions in world units, shared by the 2D and 3D views */
+  _radarTargets(rm,cb){
+    if(!rm.radar||!rm.radar.length)return;const b=rmBounds(rm);
+    for(const radar of rm.radar){
+      const prefix=radar.entity_prefix;if(!prefix)continue;
+      const rot=(radar.rotation||0)*Math.PI/180,cosR=Math.cos(rot),sinR=Math.sin(rot);
+      const sx=b.x+(radar.x||.5)*b.w,sy=b.y+(radar.y||0)*b.h;
+      for(let t=1;t<=(radar.max_targets||3);t++){
+        const xs=this._hass.states[`sensor.${prefix}_target_${t}_x`],ys=this._hass.states[`sensor.${prefix}_target_${t}_y`],ds=this._hass.states[`sensor.${prefix}_target_${t}_direction`];
+        if(!xs||!ys)continue;const tx=parseFloat(xs.state),ty=parseFloat(ys.state);
+        if(isNaN(tx)||isNaN(ty)||(tx===0&&ty===0)||ds?.state==="NA")continue;
+        const ux=tx/1000*this._upm,uy=ty/1000*this._upm;
+        cb(sx+ux*cosR+uy*sinR,sy-ux*sinR+uy*cosR);
+      }
+    }
+  }
+  _hit3(sx,sy){let best=null,bd=18;for(const h of(this._hits3d||[])){const d=Math.hypot(sx-h.x,sy-h.y);if(d<bd){bd=d;best=h}}return best}
 
   /* ── draw ─────────────────────────────────────────────── */
   _draw(){
@@ -524,6 +674,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     if(this._layers.temperature)this._drawValues(ctx,f,"temperature","\u00b0C");
     if(this._layers.humidity)this._drawValues(ctx,f,"humidity","%");
     if(this._layers.air_quality){const m=AQ_METRICS[this._aqMetric];this._drawValues(ctx,f,"air_quality",m.unit,true)}
+    if(this._layers.plugs)this._drawPlugs(ctx,f);
     if(this._layers.heating)this._drawHeating(ctx,f);
     if(this._layers.windows)this._drawWindows(ctx,f);
     if(this._layers.occupancy)this._drawOccupancy(ctx,f);
@@ -531,6 +682,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     this._drawLabels(ctx,f);
     if(this._editMode){this._drawDimensions(ctx,f);this._drawElements(ctx,f);if(this._selRoom)this._drawHandles(ctx,this._selRoom)}
     this._drawScaleBar(ctx);
+    if(this._layers.solar)this._drawSolarHud(ctx);
     if(this._editMode&&(this._action==="resize"||this._action==="move")&&this._selRoom)this._drawEdgeDims(ctx,this._selRoom);
     if(this._action==="draw"&&this._actionData.preview){const p=this._actionData.preview;const[sx,sy]=this._toScreen(p.x,p.y);ctx.strokeStyle="rgba(123,97,255,.7)";ctx.lineWidth=1.5;ctx.setLineDash([6,4]);ctx.strokeRect(sx,sy,p.w*this._scale,p.h*this._scale);ctx.setLineDash([]);this._drawEdgeDims(ctx,p)}
     this._updatePeople();
@@ -548,8 +700,14 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     ctx.strokeStyle=isSel?C.wallStrokeSel:isMerge?"rgba(229,166,32,.5)":C.wallStroke;
     ctx.lineWidth=isSel?1.5:1;
     const rad=Math.min(10,this._scale*.3);
-    for(const r of rmRects(rm)){const[sx,sy]=this._toScreen(r.x,r.y);const sw=r.w*this._scale,sh=r.h*this._scale;
+    const rs=rmRects(rm);
+    if(rs.length===1){const r=rs[0];const[sx,sy]=this._toScreen(r.x,r.y);const sw=r.w*this._scale,sh=r.h*this._scale;
       ctx.beginPath();ctx.roundRect(sx,sy,sw,sh,Math.min(rad,sw/2,sh/2));ctx.fill();ctx.stroke()}
+    else{
+      // One room made of several blocks: fill the blocks, stroke only the outer outline so no seam shows between them
+      ctx.beginPath();for(const r of rs){const[sx,sy]=this._toScreen(r.x,r.y);ctx.rect(sx,sy,r.w*this._scale,r.h*this._scale)}ctx.fill();
+      ctx.beginPath();for(const e of rmOuterEdges(rm)){const[ax,ay]=this._toScreen(e.x0,e.y0),[bx,by]=this._toScreen(e.x1,e.y1);ctx.moveTo(ax,ay);ctx.lineTo(bx,by)}ctx.stroke();
+    }
     ctx.restore()}}
 
   _drawLabels(ctx,f){ctx.textAlign="center";ctx.textBaseline="middle";for(const rm of f.rooms){const b=rmBounds(rm);const[cx,cy]=this._toScreen(b.x+b.w/2,b.y+b.h/2);const fs=Math.max(13,Math.min(20,b.w*this._scale*.12));ctx.font=`600 ${fs}px ${C.font}`;ctx.save();ctx.shadowColor="rgba(0,0,0,.6)";ctx.shadowBlur=4;ctx.fillStyle=C.text;ctx.fillText(rm.name||"?",cx,cy,b.w*this._scale-12);ctx.restore()}}
@@ -650,8 +808,9 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     const accent=type==="temperature"?C.amber:type==="humidity"?"#2196f3":"#9c27b0";
     for(const rm of f.rooms)for(const el of(rm.sensors?.[type]||[])){
       const eid=resolveAq?this._resolveAqEntity(el):el.entity_id;
-      const s=this._hass.states[eid];
       const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
+      if(eid===null){this._pill(ctx,cx,cy,"n/a",C.textMuted);continue}
+      const s=this._hass.states[eid];
       if(!s){drawMissingEntity(ctx,cx,cy);continue;}if(isNaN(parseFloat(s.state)))continue;
       const text=`${parseFloat(s.state).toFixed(1)}${unit}`;const tw=ctx.measureText(text).width+14;
       const ph=22,pr=11;
@@ -659,6 +818,34 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.stroke();
       ctx.fillStyle=accent;ctx.fillText(text,cx,cy);
     }
+  }
+
+  _pill(ctx,cx,cy,text,col){ctx.font=`600 13px ${C.font}`;ctx.textAlign="center";ctx.textBaseline="middle";const tw=ctx.measureText(text).width+14;ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-11,tw,22,11);ctx.fill();ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=col;ctx.fillText(text,cx,cy)}
+
+  /* ── plugs ────────────────────────────────────────────── */
+  _drawPlugs(ctx,f){for(const rm of f.rooms)for(const el of(rm.plugs||[])){
+    const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
+    const s=this._hass.states[el.entity_id];if(!s){drawMissingEntity(ctx,cx,cy);continue}
+    this._plugMarker(ctx,cx,cy,s.state)}}
+  _plugMarker(ctx,cx,cy,state){
+    const on=state==="on",bad=state==="unavailable"||state==="unknown";
+    ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
+    ctx.strokeStyle=on?ELEM_COL.plugs:C.pillBorder;ctx.lineWidth=on?2:1;ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.stroke();
+    drawIcon(ctx,"plugs",cx,cy,14,on);
+    if(bad){ctx.strokeStyle=C.coral;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(cx-8,cy+8);ctx.lineTo(cx+8,cy-8);ctx.stroke()}
+  }
+
+  /* ── solar / battery / grid summary ───────────────────── */
+  _solarVals(){const st=this._hass.states;const g=k=>{const s=st[SOLAR[k]];const v=s?parseFloat(s.state):NaN;return isNaN(v)?null:v};return{pv:g("pv"),soc:g("soc"),batt:g("batt"),imp:g("imp"),exp:g("exp"),load:g("load")}}
+  _drawSolarHud(ctx){
+    const v=this._solarVals();const kw=x=>x==null?"–":(Math.abs(x)<10?x.toFixed(2):x.toFixed(1))+" kW";
+    const grid=v.imp!=null&&v.exp!=null?(v.exp>v.imp?"Export "+kw(v.exp):"Import "+kw(v.imp)):"Grid –";
+    const rows=[["Solar",kw(v.pv),ELEM_COL.lights],["Battery",v.soc==null?"–":Math.round(v.soc)+"%"+(v.batt?" ("+(v.batt>0?"charging":"discharging")+")":""),C.green],["Grid",grid.replace(/^(Import|Export) /,"$1 "),C.amber],["Home",kw(v.load),C.textMid]];
+    const w=200,h=22+rows.length*20,x=this._cvW-w-16,y=60;
+    ctx.save();ctx.fillStyle=C.pillBg;ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(x,y,w,h,12);ctx.fill();ctx.stroke();
+    ctx.font=`600 13px ${C.font}`;ctx.textBaseline="middle";
+    rows.forEach((r,i)=>{const ry=y+22+i*20;ctx.textAlign="left";ctx.fillStyle=C.textMuted;ctx.fillText(r[0],x+14,ry);ctx.textAlign="right";ctx.fillStyle=r[2];ctx.fillText(r[1],x+w-14,ry)});
+    ctx.restore();
   }
 
   /* ── lights ───────────────────────────────────────────── */
@@ -860,7 +1047,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     }
   }
 
-  _allElems(rm){const out=[];for(const k of["temperature","humidity","air_quality","occupancy"])for(let i=0;i<(rm.sensors?.[k]?.length||0);i++)out.push({type:k,index:i,el:rm.sensors[k][i],container:rm.sensors[k]});for(const k of["lights","climate","windows"])for(let i=0;i<(rm[k]?.length||0);i++)out.push({type:k,index:i,el:rm[k][i],container:rm[k]});for(let i=0;i<(rm.radar?.length||0);i++)out.push({type:"radar",index:i,el:rm.radar[i],container:rm.radar});return out}
+  _allElems(rm){const out=[];for(const k of["temperature","humidity","air_quality","occupancy"])for(let i=0;i<(rm.sensors?.[k]?.length||0);i++)out.push({type:k,index:i,el:rm.sensors[k][i],container:rm.sensors[k]});for(const k of["lights","plugs","climate","windows"])for(let i=0;i<(rm[k]?.length||0);i++)out.push({type:k,index:i,el:rm[k][i],container:rm[k]});for(let i=0;i<(rm.radar?.length||0);i++)out.push({type:"radar",index:i,el:rm.radar[i],container:rm.radar});return out}
 
   _drawHandles(ctx,rm){for(const h of this._getHandles(rm)){const[sx,sy]=this._toScreen(h.wx,h.wy);ctx.beginPath();ctx.arc(sx,sy,HANDLE/2+1,0,Math.PI*2);ctx.fillStyle=C.card;ctx.fill();ctx.strokeStyle=C.accent;ctx.lineWidth=2;ctx.stroke()}}
   _getHandles(rm){if(!rm)return[];const rs=rmRects(rm);const r=rs[this._selRect]||rs[0];if(!r)return[];const{x,y,w,h}=r;return[{wx:x,wy:y,cursor:"nw-resize",dx:-1,dy:-1},{wx:x+w/2,wy:y,cursor:"n-resize",dx:0,dy:-1},{wx:x+w,wy:y,cursor:"ne-resize",dx:1,dy:-1},{wx:x,wy:y+h/2,cursor:"w-resize",dx:-1,dy:0},{wx:x+w,wy:y+h/2,cursor:"e-resize",dx:1,dy:0},{wx:x,wy:y+h,cursor:"sw-resize",dx:-1,dy:1},{wx:x+w/2,wy:y+h,cursor:"s-resize",dx:0,dy:1},{wx:x+w,wy:y+h,cursor:"se-resize",dx:1,dy:1}]}
@@ -876,7 +1063,8 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _hitViewElement(sx,sy,f){
     const hitR=20;
     for(const rm of f.rooms){
-      for(let i=0;i<(rm.lights||[]).length;i++){const el=rm.lights[i];const[wx,wy]=this._elemWorld(rm,el);const[ex,ey]=this._toScreen(wx,wy);if(Math.abs(sx-ex)<hitR&&Math.abs(sy-ey)<hitR)return{type:"lights",el,room:rm,index:i,sx:ex,sy:ey}}
+      for(const type of["lights","plugs"]){if(type==="plugs"&&!this._layers.plugs)continue;if(type==="lights"&&!this._layers.lights)continue;
+        for(let i=0;i<(rm[type]||[]).length;i++){const el=rm[type][i];const[wx,wy]=this._elemWorld(rm,el);const[ex,ey]=this._toScreen(wx,wy);if(Math.abs(sx-ex)<hitR&&Math.abs(sy-ey)<hitR)return{type,el,room:rm,index:i,sx:ex,sy:ey}}}
     }
     return null;
   }
@@ -908,7 +1096,9 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _hideEntityPopover(){if(this._ep)this._ep.style.display='none';this._popoverEntity=null;this._popoverHideTimer=null}
 
   /* ── mouse ────────────────────────────────────────────── */
-  _onDown(e){this._cv.focus();const f=this._floor();if(!f)return;const[sx,sy]=this._canvasXY(e);const[wx,wy]=this._toWorld(sx,sy);
+  _onDown(e){this._cv.focus();const f=this._floor();if(!f)return;const[sx,sy]=this._canvasXY(e);
+    if(this._view3d){if(e.button!==0)return;const h=this._hit3(sx,sy);if(h){const eid=h.el.entity_id,d=eid.split('.')[0];if(d==='light'||d==='switch')this._hass.callService(d,'toggle',{entity_id:eid})}return}
+    const[wx,wy]=this._toWorld(sx,sy);
     // Middle-click or ctrl+left-click → pan
     if(e.button===1||(e.button===0&&e.ctrlKey&&!e.shiftKey)){
       e.preventDefault();this._action="pan";this._actionData={startSx:sx,startSy:sy,origPanX:this._panX,origPanY:this._panY};this._userZoom=true;return;
@@ -953,7 +1143,9 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     if(viewHit){const eid=viewHit.el.entity_id;const domain=eid.split('.')[0];if(domain==='light')this._hass.callService('light','toggle',{entity_id:eid});else if(domain==='switch')this._hass.callService('switch','toggle',{entity_id:eid});return}
     const room=this._hitRoom(wx,wy,f);if(room!==this._selRoom){this._selRoom=room;this._scheduleRender()}
   }
-  _onMove(e){const[sx,sy]=this._canvasXY(e);const[wx,wy]=this._toWorld(sx,sy);const f=this._floor();
+  _onMove(e){const[sx,sy]=this._canvasXY(e);
+    if(this._view3d){const h=this._hit3(sx,sy);if(h){this._cv.style.cursor="pointer";clearTimeout(this._popoverHideTimer);this._popoverHideTimer=null;if(h.type==="lights")this._showEntityPopover({el:h.el,sx:h.x,sy:h.y})}else{this._cv.style.cursor="default";if(this._popoverEntity&&!this._popoverHideTimer)this._popoverHideTimer=setTimeout(()=>this._hideEntityPopover(),300)}return}
+    const[wx,wy]=this._toWorld(sx,sy);const f=this._floor();
     if(this._action==="pan"){const d=this._actionData;this._panX=d.origPanX+(sx-d.startSx);this._panY=d.origPanY+(sy-d.startSy);this._hmCache=null;this._scheduleRender();return}
     if(this._action==="drag_elem"){const{elem,room}=this._actionData;const b=rmBounds(room);elem.el.x=clamp01((wx-b.x)/b.w);elem.el.y=clamp01((wy-b.y)/b.h);this._hmCache=null;this._scheduleRender();return}
     if(this._action==="move"){const d=this._actionData;const dx=snap(wx-d.startWx),dy=snap(wy-d.startWy);const rs=rmRects(this._selRoom);for(let i=0;i<rs.length;i++){rs[i].x=d.origRects[i].x+dx;rs[i].y=d.origRects[i].y+dy}this._hmCache=null;this._scheduleRender();return}
@@ -962,7 +1154,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     if(this._editMode&&f){const h=this._hitHandle(sx,sy);if(h){this._cv.style.cursor=h.cursor;return}const hr=this._selRoom||this._hitRoom(wx,wy,f);if(hr&&this._hitElement(sx,sy,hr)){this._cv.style.cursor="grab";return}this._cv.style.cursor=this._hitRoom(wx,wy,f)?"move":"crosshair"}else{if(f){const vh=this._hitViewElement(sx,sy,f);if(vh){this._cv.style.cursor="pointer";clearTimeout(this._popoverHideTimer);this._popoverHideTimer=null;this._showEntityPopover(vh);return}}this._cv.style.cursor="default";if(this._popoverEntity&&!this._popoverHideTimer){this._popoverHideTimer=setTimeout(()=>this._hideEntityPopover(),300)}}
   }
   _onUp(){const f=this._floor();if(!f){this._action=null;return}
-    if(this._action==="draw"&&this._actionData.preview){const p=this._actionData.preview;if(p.w>=MIN_ROOM&&p.h>=MIN_ROOM){const rm={id:uid(),name:"New Room",rects:[{x:p.x,y:p.y,w:p.w,h:p.h}],area_id:null,sensors:{temperature:[],humidity:[],air_quality:[],occupancy:[]},lights:[],climate:[],windows:[],radar:[]};f.rooms.push(rm);this._selRoom=rm;this._selRect=0;this._selElem=null;this._renderSidebar()}}
+    if(this._action==="draw"&&this._actionData.preview){const p=this._actionData.preview;if(p.w>=MIN_ROOM&&p.h>=MIN_ROOM){const rm={id:uid(),name:"New Room",rects:[{x:p.x,y:p.y,w:p.w,h:p.h}],area_id:null,sensors:{temperature:[],humidity:[],air_quality:[],occupancy:[]},lights:[],plugs:[],climate:[],windows:[],radar:[]};f.rooms.push(rm);this._selRoom=rm;this._selRect=0;this._selElem=null;this._renderSidebar()}}
     if(this._action==="draw_section"&&this._actionData.preview&&this._selRoom){const p=this._actionData.preview;if(p.w>=MIN_ROOM&&p.h>=MIN_ROOM){if(!this._selRoom.rects)this._selRoom.rects=[{x:this._selRoom.x,y:this._selRoom.y,w:this._selRoom.w,h:this._selRoom.h}];this._selRoom.rects.push({x:p.x,y:p.y,w:p.w,h:p.h});this._selRect=this._selRoom.rects.length-1;this._renderSidebar()}}
     if(this._action){
       // Lock view after room interactions so auto-fit doesn't snap
@@ -981,10 +1173,10 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       // Add rects
       for(const r of rmRects(rm))base.rects.push({...r});
       // Merge sensors
-      for(const k of["temperature","humidity","occupancy"])
+      for(const k of["temperature","humidity","air_quality","occupancy"])
         for(const el of(rm.sensors?.[k]||[]))base.sensors[k].push({...el});
       // Merge lights/climate/windows/radar
-      for(const k of["lights","climate","windows"])
+      for(const k of["lights","plugs","climate","windows"])
         for(const el of(rm[k]||[]))base[k].push({...el});
       for(const el of(rm.radar||[]))base.radar.push({...el});
       // Remove merged room from floor
@@ -1034,6 +1226,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       {key:"air_quality",label:"Air Quality",cont:"sensors",domain:"sensor",dcMatch:["aqi","volatile_organic_compounds","pm25","pm10","pm1","carbon_dioxide"]},
       {key:"occupancy",label:"Motion / Occupancy",cont:"sensors",domain:"binary_sensor",dcMatch:["occupancy","motion","presence"]},
       {key:"lights",label:"Lights",cont:"direct",domain:"light"},
+      {key:"plugs",label:"Smart plugs",cont:"direct",domain:"switch"},
       {key:"climate",label:"Radiators / Climate",cont:"direct",domain:"climate"},
       {key:"windows",label:"Windows / Doors",cont:"direct",domain:"binary_sensor",dcMatch:["door","window","opening"]},
     ];
@@ -1043,7 +1236,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     // Collect all entity_ids already added to this room
     const added = new Set();
     for(const k of["temperature","humidity","air_quality","occupancy"])for(const el of(rm.sensors?.[k]||[]))added.add(el.entity_id);
-    for(const k of["lights","climate","windows"])for(const el of(rm[k]||[]))added.add(el.entity_id);
+    for(const k of["lights","plugs","climate","windows"])for(const el of(rm[k]||[]))added.add(el.entity_id);
 
     // ── Search all entities (at the top for quick access) ──
     let html=`<label style="margin-top:14px">Search all entities</label><input id="entity-search" placeholder="Type to search..." style="font-size:18px"><div id="search-results"></div>`;
@@ -1166,7 +1359,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     // Add buttons (from available list — non-AQ)
     c.querySelectorAll(".add-btn").forEach(b=>{b.addEventListener("click",()=>{
       const{s,c:cont,eid}=b.dataset;
-      const dy=s==="windows"?0:s==="climate"?.95:s==="lights"?.3:.5;
+      const dy=s==="windows"?0:s==="climate"?.95:s==="lights"?.3:s==="plugs"?.12:.5;
       const arr=cont==="sensors"?rm.sensors[s]:rm[s];
       arr.push({entity_id:eid,x:.5,y:dy});
       this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(rm);
@@ -1247,14 +1440,19 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _resolveAqEntity(anchor){
     const devId=anchor.device_id;
     if(!devId)return anchor.entity_id;
+    if(!this._aqCache)this._aqCache={};
+    const ck=devId+"|"+this._aqMetric;if(ck in this._aqCache)return this._aqCache[ck];
+    const r=this._resolveAqUncached(anchor,devId);this._aqCache[ck]=r;return r;
+  }
+  _resolveAqUncached(anchor,devId){
     const m=AQ_METRICS[this._aqMetric];if(!m)return anchor.entity_id;
     const dcSet=new Set(m.dc);
     const match=this._entityReg?.find(e=>{
-      if(e.device_id!==devId)return false;
+      if(e.device_id!==devId||!e.entity_id.startsWith("sensor."))return false;
       const dc=e.original_device_class||e.device_class||this._hass?.states[e.entity_id]?.attributes?.device_class||"";
-      return dcSet.has(dc);
+      return dcSet.has(dc)||(m.re&&m.re.test(e.entity_id));
     });
-    return match?match.entity_id:anchor.entity_id;
+    return match?match.entity_id:null;
   }
 
   /* ── get all AQ device_classes available for an anchor ── */
@@ -1282,5 +1480,5 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 }
 // Store latest buildDom on window so existing elements can pick it up
 window.__homeMapBuildDom = HomeMapPanel.prototype._buildDom;
-window.__homeMapV = 34;
+window.__homeMapV = 35;
 if(!customElements.get("home-map-panel")) customElements.define("home-map-panel",HomeMapPanel);
