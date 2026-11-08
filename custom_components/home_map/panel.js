@@ -10,10 +10,9 @@ const C_DARK = {
   text:"#DFDFEA", textMid:"#BAC0CA", textMuted:"#7A86A4",
   accent:"#7B61FF", accentDim:"rgba(123,97,255,.25)",
   amber:"#E5A620", coral:"#FF6B4A", green:"#4CAF50",
-  wallStroke:"rgba(186,192,202,.38)", wallStrokeSel:"rgba(123,97,255,.7)",
-  roomFill:"rgba(186,192,202,.055)", roomGrad0:"rgba(186,192,202,.08)", roomGrad1:"rgba(186,192,202,.025)",
-  labelShadow:"rgba(0,0,0,.8)", pillShadow:"rgba(0,0,0,.5)",
-  pillBg:"rgba(10,10,14,.88)", pillBorder:"rgba(186,192,202,.2)",
+  wallStroke:"rgba(186,192,202,.22)", wallStrokeSel:"rgba(123,97,255,.7)",
+  roomFill:"rgba(186,192,202,.03)", room3d:"rgba(94,100,124,.55)",
+  pillBg:"rgba(6,6,8,.8)", pillBorder:"rgba(186,192,202,.12)",
   hoverBg:"rgba(255,255,255,.04)", btnBorder:"rgba(186,192,202,.2)",
   font:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif",
 };
@@ -22,10 +21,9 @@ const C_LIGHT = {
   text:"#1A1C22", textMid:"#4A5068", textMuted:"#7A86A4",
   accent:"#6246EA", accentDim:"rgba(98,70,234,.15)",
   amber:"#C48800", coral:"#E04525", green:"#2E7D32",
-  wallStroke:"rgba(50,60,80,.42)", wallStrokeSel:"rgba(98,70,234,.7)",
-  roomFill:"rgba(50,60,80,.06)", roomGrad0:"rgba(50,60,80,.09)", roomGrad1:"rgba(50,60,80,.025)",
-  labelShadow:"rgba(255,255,255,.8)", pillShadow:"rgba(30,40,60,.18)",
-  pillBg:"rgba(255,255,255,.92)", pillBorder:"rgba(50,60,80,.2)",
+  wallStroke:"rgba(50,60,80,.25)", wallStrokeSel:"rgba(98,70,234,.7)",
+  roomFill:"rgba(50,60,80,.04)", room3d:"rgba(210,214,224,.75)",
+  pillBg:"rgba(255,255,255,.9)", pillBorder:"rgba(50,60,80,.12)",
   hoverBg:"rgba(0,0,0,.04)", btnBorder:"rgba(50,60,80,.2)",
   font:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif",
 };
@@ -166,7 +164,7 @@ class HomeMapPanel extends HTMLElement {
     this._hass=null; this._floors=[]; this._floorIdx=0; this._upm=DEFAULT_UPM;
     this._layers={temperature:true,humidity:false,air_quality:false,occupancy:true,windows:true,lights:true,heating:false};
     this._aqMetric="pm25";
-    this._editMode=false; this._selRoom=null; this._selRect=0; this._selElem=null; this._addingSection=false; this._mergeSet=new Set();
+    this._editMode=false; this._view3d=false; this._selRoom=null; this._selRect=0; this._selElem=null; this._addingSection=false; this._mergeSet=new Set();
     this._action=null; this._actionData={};
     this._areas=[]; this._entityReg=[]; this._deviceReg=[];
     this._hmCache=null; this._hmKey=""; this._scale=1; this._panX=0; this._panY=0;
@@ -270,15 +268,17 @@ class HomeMapPanel extends HTMLElement {
     this.shadowRoot.innerHTML=`<style>
 :host{display:block;height:100dvh;font-family:${C.font}}*{box-sizing:border-box}
 .shell{display:flex;flex-direction:column;height:100%;background:${C.bg};color:${C.text}}
-.toolbar{display:flex;align-items:center;gap:6px;padding:8px 12px;background:${C.card};border-bottom:1px solid ${C.border};flex-wrap:wrap;min-height:48px}
+.toolbar{display:flex;align-items:center;gap:6px;padding:8px 12px;background:${C.card};border-bottom:1px solid ${C.border};box-shadow:0 2px 10px rgba(0,0,0,.18);flex-wrap:wrap;min-height:48px;position:relative;z-index:1}
 .toolbar .section{display:flex;gap:4px;align-items:center}.toolbar .sep{width:1px;height:28px;background:${C.border};margin:0 4px}
-.tab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
-.tab.active{background:${C.accent};color:#fff;border-color:${C.accent}}.tab:hover{color:${C.text}}.tab.add{font-size:18px;padding:4px 12px}
-.lbtn{padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
+.tab{padding:6px 16px;border-radius:999px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
+.tab.active{background:${C.accent};color:#fff;border-color:${C.accent}}.tab:hover{color:${C.text}}.tab.add{font-size:18px;padding:4px 14px}
+.lbtn{padding:5px 12px;border-radius:999px;cursor:pointer;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
 .lbtn.on{background:${C.accent};color:#fff;border-color:${C.accent}}.lbtn:hover{color:${C.text}}
-.aq-sel{padding:4px 8px;border-radius:6px;font-size:12px;font-weight:600;background:${C.bg};color:${C.text};border:1px solid ${C.btnBorder};font-family:${C.font};cursor:pointer}
-.edit-btn{padding:6px 16px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};margin-left:auto;transition:all .15s}
+.aq-sel{padding:4px 8px;border-radius:999px;font-size:12px;font-weight:600;background:${C.bg};color:${C.text};border:1px solid ${C.btnBorder};font-family:${C.font};cursor:pointer}
+.edit-btn{padding:6px 18px;border-radius:999px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};margin-left:auto;transition:all .15s}
 .edit-btn.on{background:${C.coral};color:#fff;border-color:${C.coral}}
+.view3d-btn{padding:6px 18px;border-radius:999px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
+.view3d-btn.on{background:${C.accent};color:#fff;border-color:${C.accent}}
 .main{display:flex;flex:1;overflow:hidden;position:relative}
 canvas{flex:1;display:block;cursor:default;min-width:0}
 .sidebar{width:420px;min-width:420px;background:${C.card};border-left:1px solid ${C.border};padding:16px;overflow-y:auto;display:none;flex-shrink:0;font-size:15px}
@@ -292,7 +292,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 .sidebar button{padding:10px 16px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;background:${C.accentDim};color:${C.accent};border:1px solid rgba(123,97,255,.3);margin-top:8px;font-family:${C.font}}
 .sidebar button.danger{background:rgba(255,107,74,.15);color:${C.coral};border:1px solid rgba(255,107,74,.3)}
 .sidebar .fe{margin-top:16px;padding-top:12px;border-top:1px solid ${C.border}}
-.legend{position:absolute;bottom:12px;left:12px;display:flex;align-items:center;gap:8px;background:${C.pillBg};backdrop-filter:blur(8px);padding:8px 14px;border-radius:999px;font-size:12px;color:${C.textMid};border:1px solid ${C.border};pointer-events:none}
+.legend{position:absolute;bottom:12px;left:12px;display:flex;align-items:center;gap:8px;background:${C.pillBg};padding:8px 12px;border-radius:10px;font-size:12px;color:${C.textMid};border:1px solid ${C.border};box-shadow:0 4px 16px rgba(0,0,0,.25);pointer-events:none}
 .legend canvas{border-radius:2px}
 .people-bar{position:absolute;top:12px;left:12px;display:flex;gap:12px;pointer-events:none}
 .person-badge{display:flex;flex-direction:column;align-items:center;gap:2px}
@@ -305,7 +305,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 .entity-popover input[type=color]{width:100%;height:32px;border:none;cursor:pointer;border-radius:6px;padding:0;background:transparent}
 </style>
 <div class="shell">
-<div class="toolbar"><div class="section" id="ft"></div><div class="sep"></div><div class="section" id="lb"></div><button class="edit-btn" id="eb">Edit</button></div>
+<div class="toolbar"><div class="section" id="ft"></div><div class="sep"></div><div class="section" id="lb"></div><button class="view3d-btn" id="v3d" style="margin-left:auto">3D</button><button class="edit-btn" id="eb">Edit</button></div>
 <div class="main"><canvas id="cv"></canvas><div class="sidebar" id="sb"></div><div class="legend" id="lg"></div><div class="people-bar" id="pb"></div><div class="entity-popover" id="ep"></div></div>
 </div>`;
     const S=this.shadowRoot;this._cv=S.getElementById("cv");this._ctx=this._cv.getContext("2d");this._sb=S.getElementById("sb");this._lg=S.getElementById("lg");this._pb=S.getElementById("pb");this._ep=S.getElementById("ep");this._ep.addEventListener("mouseenter",()=>{clearTimeout(this._popoverHideTimer);this._popoverHideTimer=null});this._ep.addEventListener("mouseleave",()=>{this._popoverHideTimer=setTimeout(()=>this._hideEntityPopover(),300)});
@@ -321,7 +321,12 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       }
       this._hmCache=null;this._scheduleRender();this._updateLegend();if(this._aqSel)this._aqSel.style.display=this._layers.air_quality?"inline-block":"none"});lc.appendChild(b);
       if(L.id==="air_quality"){const sel=document.createElement("select");sel.className="aq-sel";sel.style.display=this._layers.air_quality?"inline-block":"none";for(const[k,m]of Object.entries(AQ_METRICS)){const o=document.createElement("option");o.value=k;o.textContent=m.label;if(k===this._aqMetric)o.selected=true;sel.appendChild(o)}sel.addEventListener("change",()=>{this._aqMetric=sel.value;this._hmCache=null;this._scheduleRender();this._updateLegend()});lc.appendChild(sel);this._aqSel=sel}}
-    S.getElementById("eb").addEventListener("click",()=>{this._editMode=!this._editMode;const eb=S.getElementById("eb");eb.classList.toggle("on",this._editMode);eb.textContent=this._editMode?"Done":"Edit";this._selRoom=null;this._selElem=null;this._mergeSet.clear();this._refreshTabs();this._renderSidebar();this._scheduleRender()});
+    S.getElementById("eb").addEventListener("click",()=>{this._editMode=!this._editMode;const eb=S.getElementById("eb");eb.classList.toggle("on",this._editMode);eb.textContent=this._editMode?"Done":"Edit";
+      if(this._editMode&&this._view3d){this._view3d=false;S.getElementById("v3d").classList.remove("on")}
+      this._selRoom=null;this._selElem=null;this._mergeSet.clear();this._refreshTabs();this._renderSidebar();this._scheduleRender()});
+    S.getElementById("v3d").addEventListener("click",()=>{this._view3d=!this._view3d;const b=S.getElementById("v3d");b.classList.toggle("on",this._view3d);
+      if(this._view3d&&this._editMode){this._editMode=false;S.getElementById("eb").classList.remove("on");S.getElementById("eb").textContent="Edit";this._selRoom=null;this._selElem=null;this._renderSidebar()}
+      this._userZoom=false;this._scheduleRender()});
     this._cv.addEventListener("mousedown",this._boundMouse.down);this._cv.addEventListener("mousemove",this._boundMouse.move);this._cv.addEventListener("mouseup",this._boundMouse.up);this._cv.addEventListener("mouseleave",this._boundMouse.up);
     // Prevent context menu on canvas
     this._cv.addEventListener("contextmenu",(e)=>e.preventDefault());
@@ -445,13 +450,73 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _toScreen(wx,wy){return[wx*this._scale+this._panX,wy*this._scale+this._panY]}
   _elemWorld(rm,el){const b=rmBounds(rm);return[b.x+el.x*b.w,b.y+el.y*b.h]}
 
+  /* ── 3D isometric view ───────────────────────────────────
+   * Extrudes each room's floor rects into a simple massing block (no real
+   * geometry/openings, no photos — see home-map README for why). */
+  _autoFit3D(f){
+    const H=2.4*this._upm;
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+    const pts=[];
+    for(const rm of f.rooms)for(const r of rmRects(rm))
+      pts.push([r.x,r.y,0],[r.x+r.w,r.y,0],[r.x,r.y+r.h,0],[r.x+r.w,r.y+r.h,0],
+                [r.x,r.y,H],[r.x+r.w,r.y,H],[r.x,r.y+r.h,H],[r.x+r.w,r.y+r.h,H]);
+    if(!pts.length){this._scale3d=1;this._panX3d=this._cvW/2;this._panY3d=this._cvH/2;return}
+    for(const[wx,wy,wz]of pts){const px=(wx-wy)*.866,py=(wx+wy)*.5-wz;x0=Math.min(x0,px);x1=Math.max(x1,px);y0=Math.min(y0,py);y1=Math.max(y1,py)}
+    const fw=x1-x0,fh=y1-y0;if(fw<=0||fh<=0){this._scale3d=1;this._panX3d=this._cvW/2;this._panY3d=this._cvH/2;return}
+    this._scale3d=Math.min((this._cvW-PAD*2)/fw,(this._cvH-PAD*2)/fh,3);
+    this._panX3d=(this._cvW-fw*this._scale3d)/2-x0*this._scale3d;
+    this._panY3d=(this._cvH-fh*this._scale3d)/2-y0*this._scale3d;
+  }
+  _iso3(wx,wy,wz){const s=this._scale3d;return[(wx-wy)*.866*s+this._panX3d,(wx+wy)*.5*s-wz*s+this._panY3d]}
+  _shade(rgba,amt){const m=rgba.match(/rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)/);if(!m)return rgba;const f=v=>Math.max(0,Math.min(255,Math.round(+v+255*amt)));return`rgba(${f(m[1])},${f(m[2])},${f(m[3])},${m[4]??1})`}
+  _draw3D(ctx,f){
+    this._autoFit3D(f);
+    const H=2.4*this._upm;
+    const aT=this._layers.temperature,aH=this._layers.humidity;
+    ctx.font=`600 13px ${C.font}`;ctx.textAlign="center";ctx.textBaseline="middle";
+    const poly=(pts,fill)=>{ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=C.wallStroke;ctx.lineWidth=1;ctx.stroke()};
+    // Painter's algorithm: rooms further "back" (smaller x+y) first
+    const rooms=[...f.rooms].sort((a,b)=>{const ba=rmBounds(a),bb=rmBounds(b);return(ba.x+ba.w/2+ba.y+ba.h/2)-(bb.x+bb.w/2+bb.y+bb.h/2)});
+    for(const rm of rooms){
+      let floorFill=C.room3d;
+      if(aT||aH){
+        const type=aT?"temperature":"humidity";
+        const vals=(rm.sensors?.[type]||[]).map(el=>{const s=this._hass.states[el.entity_id];return s?parseFloat(s.state):NaN}).filter(v=>!isNaN(v));
+        if(vals.length){const avg=vals.reduce((a,b)=>a+b,0)/vals.length;const[r,g,b]=type==="temperature"?tempToRgb(avg,0,30):humToRgb(avg,0,100);floorFill=`rgba(${r},${g},${b},.6)`}
+      }
+      const isSel=rm===this._selRoom;
+      for(const r of rmRects(rm)){
+        const x0=r.x,y0=r.y,x1=r.x+r.w,y1=r.y+r.h;
+        const top=[this._iso3(x0,y0,H),this._iso3(x1,y0,H),this._iso3(x1,y1,H),this._iso3(x0,y1,H)];
+        const wallR=[this._iso3(x1,y0,H),this._iso3(x1,y1,H),this._iso3(x1,y1,0),this._iso3(x1,y0,0)];
+        const wallF=[this._iso3(x0,y1,H),this._iso3(x1,y1,H),this._iso3(x1,y1,0),this._iso3(x0,y1,0)];
+        if(isSel){ctx.save();ctx.shadowColor="rgba(123,97,255,.5)";ctx.shadowBlur=18}
+        poly(wallF,this._shade(floorFill,-.25));
+        poly(wallR,this._shade(floorFill,-.42));
+        poly(top,floorFill);
+        if(isSel)ctx.restore();
+      }
+      const b=rmBounds(rm);const[lx,ly]=this._iso3(b.x+b.w/2,b.y+b.h/2,H);
+      ctx.save();ctx.shadowColor="rgba(0,0,0,.6)";ctx.shadowBlur=4;ctx.fillStyle=C.text;ctx.font=`600 13px ${C.font}`;ctx.fillText(rm.name||"?",lx,ly);ctx.restore();
+      for(const el of(rm.lights||[])){const s=this._hass.states[el.entity_id];if(s?.state==="on"){const[wx,wy]=this._elemWorld(rm,el);const[gx,gy]=this._iso3(wx,wy,H);ctx.save();ctx.shadowColor=ELEM_COL.lights;ctx.shadowBlur=10;ctx.fillStyle=ELEM_COL.lights;ctx.beginPath();ctx.arc(gx,gy-16,5,0,Math.PI*2);ctx.fill();ctx.restore()}}
+      if(aT){
+        const sv=(rm.sensors?.temperature||[]).map(el=>this._hass.states[el.entity_id]).find(s=>s&&!isNaN(parseFloat(s.state)));
+        if(sv){const text=`${parseFloat(sv.state).toFixed(1)}°C`;ctx.font=`600 11px ${C.font}`;const tw=ctx.measureText(text).width+14;ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(lx-tw/2,ly+14,tw,18,9);ctx.fill();ctx.fillStyle=C.amber;ctx.fillText(text,lx,ly+23)}
+      }
+    }
+    ctx.textAlign="center";ctx.textBaseline="middle";ctx.font=`500 12px ${C.font}`;ctx.fillStyle=C.textMuted;
+    ctx.fillText("3D massing view — real photos not yet added",this._cvW/2,this._cvH-20);
+  }
+
   /* ── draw ─────────────────────────────────────────────── */
   _draw(){
     const ctx=this._ctx,dpr=this._dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,this._cvW,this._cvH);
     // Canvas not laid out yet (hidden tab, mid-resize): nothing fits inside PAD, and the fit scale
     // would go negative. The ResizeObserver redraws once it has a real size.
     if(this._cvW<=PAD*2||this._cvH<=PAD*2)return;
-    this._autoFit();const f=this._floor();if(!f)return;
+    const f=this._floor();if(!f)return;
+    if(this._view3d){this._draw3D(ctx,f);this._updatePeople();this._updateLegend();return}
+    this._autoFit();
     if(this._editMode)this._drawGrid(ctx);
     if(this._layers.temperature||this._layers.humidity||this._layers.air_quality)this._drawHeatMap(ctx,f);
     if(this._layers.lights)this._drawLights(ctx,f);
@@ -475,15 +540,19 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _drawGrid(ctx){const gs=GRID*this._scale;if(gs<4)return;const ms=this._upm*this._scale;ctx.strokeStyle="rgba(186,192,202,.04)";ctx.lineWidth=.5;const ox=this._panX%gs,oy=this._panY%gs;for(let x=ox;x<this._cvW;x+=gs){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,this._cvH);ctx.stroke()}for(let y=oy;y<this._cvH;y+=gs){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(this._cvW,y);ctx.stroke()}if(ms>20){ctx.strokeStyle="rgba(123,97,255,.08)";ctx.lineWidth=1;const mx=this._panX%ms,my=this._panY%ms;for(let x=mx;x<this._cvW;x+=ms){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,this._cvH);ctx.stroke()}for(let y=my;y<this._cvH;y+=ms){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(this._cvW,y);ctx.stroke()}}}
 
   _drawRooms(ctx,f){for(const rm of f.rooms){const isSel=rm===this._selRoom;const isMerge=this._mergeSet.has(rm);
-    // Selected room: subtle glow
-    if(isSel){ctx.save();ctx.shadowColor="rgba(123,97,255,.35)";ctx.shadowBlur=20}
+    // Ambient depth shadow under every room, independent of selection
+    ctx.save();ctx.shadowColor="rgba(0,0,0,.28)";ctx.shadowBlur=14;ctx.shadowOffsetY=3;
+    // Selected room: accent glow stacked on top of the ambient shadow
+    if(isSel){ctx.shadowColor="rgba(123,97,255,.4)";ctx.shadowBlur=22;ctx.shadowOffsetY=0}
     ctx.fillStyle=isMerge?"rgba(229,166,32,.06)":C.roomFill;
     ctx.strokeStyle=isSel?C.wallStrokeSel:isMerge?"rgba(229,166,32,.5)":C.wallStroke;
-    ctx.lineWidth=isSel?2:1.5;ctx.lineJoin="round";
-    for(const r of rmRects(rm)){const[sx,sy]=this._toScreen(r.x,r.y);const rw=r.w*this._scale,rh=r.h*this._scale;const g=ctx.createLinearGradient(0,sy,0,sy+rh);g.addColorStop(0,isMerge?"rgba(229,166,32,.09)":C.roomGrad0);g.addColorStop(1,isMerge?"rgba(229,166,32,.03)":C.roomGrad1);ctx.fillStyle=g;ctx.fillRect(sx,sy,rw,rh);ctx.strokeRect(sx,sy,rw,rh)}
-    if(isSel)ctx.restore()}}
+    ctx.lineWidth=isSel?1.5:1;
+    const rad=Math.min(10,this._scale*.3);
+    for(const r of rmRects(rm)){const[sx,sy]=this._toScreen(r.x,r.y);const sw=r.w*this._scale,sh=r.h*this._scale;
+      ctx.beginPath();ctx.roundRect(sx,sy,sw,sh,Math.min(rad,sw/2,sh/2));ctx.fill();ctx.stroke()}
+    ctx.restore()}}
 
-  _drawLabels(ctx,f){ctx.textAlign="center";ctx.textBaseline="middle";for(const rm of f.rooms){const b=rmBounds(rm);const big=rmRects(rm).reduce((m,r)=>r.w*r.h>m.w*m.h?r:m);const[cx,cy0]=this._toScreen(big.x+big.w/2,big.y);const cy=cy0+16;const fs=Math.max(11,Math.min(15,b.w*this._scale*.09));ctx.font=`600 ${fs}px ${C.font}`;ctx.save();ctx.letterSpacing="1.5px";ctx.shadowColor=C.labelShadow;ctx.shadowBlur=6;ctx.fillStyle=C.textMid;ctx.fillText((rm.name||"?").toUpperCase(),cx,cy,big.w*this._scale-12);ctx.restore()}}
+  _drawLabels(ctx,f){ctx.textAlign="center";ctx.textBaseline="middle";for(const rm of f.rooms){const b=rmBounds(rm);const[cx,cy]=this._toScreen(b.x+b.w/2,b.y+b.h/2);const fs=Math.max(13,Math.min(20,b.w*this._scale*.12));ctx.font=`600 ${fs}px ${C.font}`;ctx.save();ctx.shadowColor="rgba(0,0,0,.6)";ctx.shadowBlur=4;ctx.fillStyle=C.text;ctx.fillText(rm.name||"?",cx,cy,b.w*this._scale-12);ctx.restore()}}
 
   _drawDimensions(ctx,f){ctx.textAlign="center";ctx.textBaseline="bottom";ctx.font=`500 13px ${C.font}`;ctx.fillStyle=C.textMuted;for(const rm of f.rooms){for(const r of rmRects(rm)){const wm=(r.w/this._upm).toFixed(1),hm=(r.h/this._upm).toFixed(1);const[cx,cy]=this._toScreen(r.x+r.w/2,r.y+r.h);ctx.fillText(`${wm} \u00d7 ${hm}m`,cx,cy-4)}}}
 
@@ -566,7 +635,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
           val=wV/wS;
         }
         const[r,g,b]=fn(val);
-        const idx=(py*w+px)*4;d[idx]=r;d[idx+1]=g;d[idx+2]=b;d[idx+3]=125;
+        const idx=(py*w+px)*4;d[idx]=r;d[idx+1]=g;d[idx+2]=b;d[idx+3]=150;
       }
     }
     oc.putImageData(img,0,0);ctx.save();ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
@@ -586,7 +655,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       if(!s){drawMissingEntity(ctx,cx,cy);continue;}if(isNaN(parseFloat(s.state)))continue;
       const text=`${parseFloat(s.state).toFixed(1)}${unit}`;const tw=ctx.measureText(text).width+14;
       const ph=22,pr=11;
-      ctx.save();ctx.shadowColor=C.pillShadow;ctx.shadowBlur=8;ctx.shadowOffsetY=2;ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.fill();ctx.restore();
+      ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.fill();
       ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.stroke();
       ctx.fillStyle=accent;ctx.fillText(text,cx,cy);
     }
@@ -1213,5 +1282,5 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 }
 // Store latest buildDom on window so existing elements can pick it up
 window.__homeMapBuildDom = HomeMapPanel.prototype._buildDom;
-window.__homeMapV = 33;
+window.__homeMapV = 34;
 if(!customElements.get("home-map-panel")) customElements.define("home-map-panel",HomeMapPanel);
