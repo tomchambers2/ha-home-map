@@ -10,6 +10,9 @@ An interactive floor plan panel for Home Assistant. View your home's rooms with 
 - **Window/door status** — open/closed indicators at a glance
 - **Light visualization** — glow effects showing which lights are on and their color
 - **Heating status** — radiator/climate entity display
+- **Smart plugs** — on/off state, click to toggle, draggable in edit mode
+- **Solar summary** — PV, battery, grid and home power
+- **3D view** — cut-away isometric view with every layer, people, roof solar array, and click/hover control of lights and plugs
 - **Occupancy detection** — presence indicators per room
 - **Multi-floor support** — tab between floors, synced with HA floor registry
 - **Auto-discovery** — rooms auto-generated from HA areas, entities matched by area

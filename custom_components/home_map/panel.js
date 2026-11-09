@@ -5,23 +5,39 @@ const GRID = 10, HANDLE = 10, MARKER = 16, MIN_ROOM = 40, HEATMAP_RES = 6, PAD =
 const TEMP_MIN = 12, TEMP_MAX = 28, HUM_MIN = 30, HUM_MAX = 90, DEFAULT_UPM = 50;
 
 /* ── palette ───────────────────────────────────────────── */
-const C = {
+const C_DARK = {
   bg:"#060608", card:"#111114", border:"#222228",
   text:"#DFDFEA", textMid:"#BAC0CA", textMuted:"#7A86A4",
   accent:"#7B61FF", accentDim:"rgba(123,97,255,.25)",
   amber:"#E5A620", coral:"#FF6B4A", green:"#4CAF50",
-  wallStroke:"rgba(186,192,202,.38)", wallStrokeSel:"rgba(123,97,255,.7)",
-  roomFill:"rgba(186,192,202,.055)",
+  wallStroke:"rgba(186,192,202,.22)", wallStrokeSel:"rgba(123,97,255,.7)",
+  roomFill:"rgba(186,192,202,.03)", room3d:"rgba(94,100,124,.55)",
+  pillBg:"rgba(6,6,8,.8)", pillBorder:"rgba(186,192,202,.12)",
+  hoverBg:"rgba(255,255,255,.04)", btnBorder:"rgba(186,192,202,.2)",
   font:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif",
 };
+const C_LIGHT = {
+  bg:"#F4F5F7", card:"#FFFFFF", border:"#D8DAE0",
+  text:"#1A1C22", textMid:"#4A5068", textMuted:"#7A86A4",
+  accent:"#6246EA", accentDim:"rgba(98,70,234,.15)",
+  amber:"#C48800", coral:"#E04525", green:"#2E7D32",
+  wallStroke:"rgba(50,60,80,.25)", wallStrokeSel:"rgba(98,70,234,.7)",
+  roomFill:"rgba(50,60,80,.04)", room3d:"rgba(210,214,224,.75)",
+  pillBg:"rgba(255,255,255,.9)", pillBorder:"rgba(50,60,80,.12)",
+  hoverBg:"rgba(0,0,0,.04)", btnBorder:"rgba(50,60,80,.2)",
+  font:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif",
+};
+let C = {...C_DARK};
 
 const LAYERS = [
   { id: "temperature", label: "Temperature" }, { id: "humidity", label: "Humidity" },
+  { id: "air_quality", label: "Air Quality" },
   { id: "occupancy", label: "People" }, { id: "windows", label: "Windows" },
-  { id: "lights", label: "Lights" }, { id: "heating", label: "Heating" },
+  { id: "lights", label: "Lights" }, { id: "plugs", label: "Plugs" }, { id: "heating", label: "Heating" }, { id: "solar", label: "Solar" },
 ];
-const SENSOR_CLASSES = { temperature: ["temperature"], humidity: ["humidity"], occupancy: ["occupancy","motion","presence"] };
-const ELEM_COL = { temperature:"#E5A620", humidity:"#2196f3", occupancy:"#4caf50", lights:"#fdd835", climate:"#f44336", windows:"#7B61FF" };
+const HEATMAP_LAYERS = new Set(["temperature","humidity","air_quality"]);
+const SENSOR_CLASSES = { temperature: ["temperature"], humidity: ["humidity"], air_quality: ["aqi","volatile_organic_compounds","pm25","pm10","pm1","carbon_dioxide"], occupancy: ["occupancy","motion","presence"] };
+const ELEM_COL = { temperature:"#E5A620", humidity:"#2196f3", air_quality:"#9c27b0", occupancy:"#4caf50", lights:"#fdd835", plugs:"#26C6DA", climate:"#f44336", windows:"#7B61FF", radar:"#00E676" };
 
 /* ── colour helpers ─────────────────────────────────────── */
 function hslToRgb(h,s,l){h/=360;s/=100;l/=100;let r,g,b;if(s===0){r=g=b=l}else{const q2r=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};const q=l<.5?l*(1+s):l+s-l*s;const p=2*l-q;r=q2r(p,q,h+1/3);g=q2r(p,q,h);b=q2r(p,q,h-1/3)}return[Math.round(r*255),Math.round(g*255),Math.round(b*255)]}
@@ -40,8 +56,20 @@ function lerpStops(t,stops){
 const TEMP_STOPS=[[0,30,70,180],[.25,50,150,190],[.5,180,170,60],[.75,220,120,30],[1,190,40,30]];
 // Humidity: warm tan → teal → deep blue
 const HUM_STOPS=[[0,200,170,80],[.35,100,190,160],[.65,50,130,200],[1,30,50,170]];
+// Air quality color stops per metric (green→yellow→orange→red)
+const AQ_GOOD_BAD=[[0,76,175,80],[.25,160,200,60],[.5,230,180,40],[.75,230,100,30],[1,190,40,30]];
+const AQ_METRICS={
+  pm25:  {label:"PM2.5", unit:"\u00b5g/m\u00b3", min:0, max:150, stops:AQ_GOOD_BAD, dc:["pm25"]},
+  pm10:  {label:"PM10",  unit:"\u00b5g/m\u00b3", min:0, max:300, stops:AQ_GOOD_BAD, dc:["pm10"]},
+  pm1:   {label:"PM1",   unit:"\u00b5g/m\u00b3", min:0, max:100, stops:AQ_GOOD_BAD, dc:["pm1"]},
+  co2:   {label:"CO\u2082",unit:"ppm", min:400, max:2000, stops:[[0,76,175,80],[.2,120,200,80],[.4,200,200,60],[.6,230,160,40],[.8,230,100,30],[1,190,40,30]], dc:["carbon_dioxide"]},
+  voc:   {label:"VOC",   unit:"",     min:0, max:500, stops:[[0,76,175,80],[.2,160,200,60],[.4,230,180,40],[.6,230,120,30],[.8,200,50,30],[1,140,30,140]], dc:["aqi","volatile_organic_compounds"], re:/_sen55_voc$/},
+};
 function tempToRgb(v,mn,mx){return lerpStops((v-(mn!=null?mn:TEMP_MIN))/((mx!=null?mx:TEMP_MAX)-(mn!=null?mn:TEMP_MIN)),TEMP_STOPS)}
 function humToRgb(v,mn,mx){return lerpStops((v-(mn!=null?mn:HUM_MIN))/((mx!=null?mx:HUM_MAX)-(mn!=null?mn:HUM_MIN)),HUM_STOPS)}
+function aqToRgb(v,mn,mx,stops){return lerpStops((v-mn)/(mx-mn),stops)}
+function fmtVal(state,unit){const n=parseFloat(state);if(isNaN(n))return`${state}${unit}`;return`${+n.toFixed(1)}${unit}`}
+function getDeviceClass(eid,entityReg,hass){const re=entityReg?.find(e=>e.entity_id===eid);return re?.original_device_class||re?.device_class||hass?.states[eid]?.attributes?.device_class||""}
 function snap(v){return Math.round(v/GRID)*GRID}
 function uid(){return Math.random().toString(36).slice(2,10)}
 function clamp01(v){return Math.max(0,Math.min(1,v))}
@@ -53,8 +81,50 @@ function rmBounds(rm){
   for(const r of rs){x0=Math.min(x0,r.x);y0=Math.min(y0,r.y);x1=Math.max(x1,r.x+r.w);y1=Math.max(y1,r.y+r.h)}
   return{x:x0,y:y0,w:x1-x0,h:y1-y0};
 }
+/* Outer boundary of a multi-block room: every block edge minus the stretches shared with another block of the same room. Each edge carries its outward normal (nx,ny). */
+function rmOuterEdges(rm){
+  const rs=rmRects(rm);const out=[];
+  const cover=(lo,hi,ivs)=>{ // subtract intervals from [lo,hi]
+    let segs=[[lo,hi]];
+    for(const[a,b]of ivs){const n=[];for(const[p,q]of segs){if(b<=p||a>=q){n.push([p,q]);continue}if(a>p)n.push([p,a]);if(b<q)n.push([b,q])}segs=n}
+    return segs.filter(([p,q])=>q-p>0.01)};
+  rs.forEach((r,i)=>{
+    const others=rs.filter((_,j)=>j!==i);
+    // top (normal -y), bottom (+y): shared if another block touches that line and overlaps in x
+    for(const[y,ny]of[[r.y,-1],[r.y+r.h,1]]){
+      const iv=others.filter(o=>(ny===-1?o.y+o.h:o.y)===y).map(o=>[o.x,o.x+o.w]);
+      for(const[a,b]of cover(r.x,r.x+r.w,iv))out.push({x0:a,y0:y,x1:b,y1:y,nx:0,ny});
+    }
+    for(const[x,nx]of[[r.x,-1],[r.x+r.w,1]]){
+      const iv=others.filter(o=>(nx===-1?o.x+o.w:o.x)===x).map(o=>[o.y,o.y+o.h]);
+      for(const[a,b]of cover(r.y,r.y+r.h,iv))out.push({x0:x,y0:a,x1:x,y1:b,nx,ny:0});
+    }
+  });
+  return out;
+}
 function ptInRoom(wx,wy,rm){for(const r of rmRects(rm))if(wx>=r.x&&wx<=r.x+r.w&&wy>=r.y&&wy<=r.y+r.h)return true;return false}
 function ptInRect(wx,wy,r){return wx>=r.x&&wx<=r.x+r.w&&wy>=r.y&&wy<=r.y+r.h}
+
+/* Smart plugs and the HA area each lives in; placed at default positions the first time the map loads. */
+const PLUG_SEED=[
+  ["switch.0xa4c13801d1feffff","living_room"],["switch.living_room_lamp_small","living_room"],
+  ["switch.0xa4c13802ac57ffff","conservatory"],
+  ["switch.washing_machine_plug","kitchen"],["switch.dishwasher","kitchen"],["switch.0xa4c1380fd119ffff","kitchen"],["switch.fridge_freezer","kitchen"],
+  ["switch.home_assistant_plug","hallway"],
+  ["switch.bedroom_dehumidifier","bedroom"],["switch.office_power_strip","bedroom"],
+  ["switch.eve_energy_20ebt8601","office"],
+  ["switch.meross_office_outlet_1","office_tom"],["switch.meross_office_outlet_2","office_tom"],["switch.meross_office_outlet_3","office_tom"],["switch.meross_office_outlet_4","office_tom"],["switch.meross_office_outlet_5","office_tom"],["switch.meross_office_usb","office_tom"],["switch.meross_office_air_purifier","office_tom"],["switch.office_tom_eve_energy_plug_unassigned","office_tom"],
+];
+const SOLAR={pv:"sensor.sigen_plant_pv_power",soc:"sensor.sigen_plant_battery_state_of_charge",batt:"sensor.sigen_plant_battery_power",imp:"sensor.sigen_plant_grid_import_power",exp:"sensor.sigen_plant_grid_export_power",load:"sensor.sigen_plant_consumed_power"};
+
+/* ── missing entity indicator ──────────────────────────── */
+function drawMissingEntity(ctx, cx, cy) {
+  // Red circle with exclamation mark
+  ctx.beginPath(); ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(244,67,54,.85)"; ctx.fill();
+  ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff"; ctx.fillText("!", cx, cy);
+}
 
 /* ── icon drawing ───────────────────────────────────────── */
 function drawIcon(ctx, type, cx, cy, sz, active) {
@@ -72,6 +142,15 @@ function drawIcon(ctx, type, cx, cy, sz, active) {
       ctx.bezierCurveTo(sz*.45, -sz*.05, sz*.45, sz*.35, 0, sz*.55);
       ctx.bezierCurveTo(-sz*.45, sz*.35, -sz*.45, -sz*.05, 0, -sz*.55);
       ctx.fill(); break;
+    case "air_quality": // cloud/air
+      ctx.fillStyle = c;
+      ctx.beginPath();
+      ctx.arc(-sz*.15, 0, sz*.3, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath();
+      ctx.arc(sz*.2, 0, sz*.25, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, -sz*.2, sz*.22, 0, Math.PI*2); ctx.fill();
+      break;
     case "occupancy": // person
       ctx.fillStyle = c;
       ctx.beginPath(); ctx.arc(0, -sz*.25, sz*.22, 0, Math.PI*2); ctx.fill();
@@ -83,11 +162,22 @@ function drawIcon(ctx, type, cx, cy, sz, active) {
       ctx.strokeStyle = c; ctx.lineWidth = 2;
       for(let i=0;i<8;i++){const a=i*Math.PI/4;ctx.beginPath();ctx.moveTo(Math.cos(a)*sz*.38,Math.sin(a)*sz*.38);ctx.lineTo(Math.cos(a)*sz*.55,Math.sin(a)*sz*.55);ctx.stroke()}
       break;
+    case "plugs": // socket with two pins
+      ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.roundRect(-sz*.38, -sz*.38, sz*.76, sz*.76, sz*.18); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-sz*.13, -sz*.14); ctx.lineTo(-sz*.13, sz*.02); ctx.moveTo(sz*.13, -sz*.14); ctx.lineTo(sz*.13, sz*.02); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, sz*.17, sz*.07, 0, Math.PI*2); ctx.fillStyle = c; ctx.fill();
+      break;
     case "climate": // radiator
       ctx.fillStyle = c;
       ctx.fillRect(-sz*.45, -sz*.3, sz*.9, sz*.6);
       ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.lineWidth = 1.5;
       for(let i=0;i<4;i++){const lx=-sz*.3+i*sz*.2;ctx.beginPath();ctx.moveTo(lx,-sz*.4);ctx.lineTo(lx,sz*.4);ctx.stroke()}
+      break;
+    case "radar": // radar waves
+      ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.lineCap = "round";
+      for(let i=1;i<=3;i++){const r=sz*(.15+i*.13);ctx.beginPath();ctx.arc(0,0,r,-Math.PI*.35,-Math.PI*.65,true);ctx.stroke()}
+      ctx.fillStyle = c; ctx.beginPath(); ctx.arc(0,0,sz*.1,0,Math.PI*2); ctx.fill();
       break;
     case "windows": // window — two-pane arch
       ctx.strokeStyle = c; ctx.lineWidth = 1.5; ctx.lineCap = "round";
@@ -111,32 +201,41 @@ class HomeMapPanel extends HTMLElement {
   constructor() {
     super(); this.attachShadow({mode:"open"});
     this._hass=null; this._floors=[]; this._floorIdx=0; this._upm=DEFAULT_UPM;
-    this._layers={temperature:true,humidity:false,occupancy:true,windows:true,lights:true,heating:false};
-    this._editMode=false; this._selRoom=null; this._selRect=0; this._selElem=null; this._addingSection=false; this._mergeSet=new Set();
+    this._layers={temperature:true,humidity:false,air_quality:false,occupancy:true,windows:true,lights:true,plugs:true,heating:false,solar:true};
+    this._aqMetric="pm25";
+    this._editMode=false; this._view3d=false; this._selRoom=null; this._selRect=0; this._selElem=null; this._addingSection=false; this._mergeSet=new Set();
     this._action=null; this._actionData={};
     this._areas=[]; this._entityReg=[]; this._deviceReg=[];
     this._hmCache=null; this._hmKey=""; this._scale=1; this._panX=0; this._panY=0;
     this._rendered=false; this._saveTimer=null; this._rafId=null; this._ro=null; this._dpr=1; this._cvW=0; this._cvH=0;
+    this._darkMode=null;this._popoverEntity=null;this._popoverHideTimer=null;
     this._boundMouse={down:e=>this._onDown(e),move:e=>this._onMove(e),up:e=>this._onUp(e)};
   }
   set hass(h){const p=this._hass;this._hass=h;
+    // Detect dark mode from HA themes
+    const dark=!!h?.themes?.darkMode;
+    const themeChanged=this._darkMode!==dark;
+    if(themeChanged){this._darkMode=dark;Object.assign(C,dark?C_DARK:C_LIGHT)}
     // Hot-reload: if a newer version of the JS loaded, rebuild DOM with its _buildDom
     const gv=window.__homeMapV||0;
-    if(!this._rendered||this._bv!==gv){
+    if(!this._rendered||this._bv!==gv||themeChanged){
       if(window.__homeMapBuildDom)this._buildDom=window.__homeMapBuildDom;
-      this._buildDom();this._rendered=true;this._bv=gv;this._loadData();
+      this._buildDom();this._rendered=true;this._bv=gv;if(!themeChanged||!p)this._loadData();
+      else{this._hmCache=null;this._refreshTabs();this._renderSidebar();this._scheduleRender()}
     }
     if(this._sc(p,h)){this._hmCache=null;this._scheduleRender()}}
-  _sc(a,b){if(!a)return true;const f=this._floor();if(!f)return false;for(const rm of f.rooms){for(const k of["temperature","humidity","occupancy"])for(const el of(rm.sensors?.[k]||[]))if(el.entity_id&&a.states[el.entity_id]?.state!==b.states[el.entity_id]?.state)return true;for(const k of["lights","climate","windows"])for(const el of(rm[k]||[]))if(el.entity_id&&a.states[el.entity_id]?.state!==b.states[el.entity_id]?.state)return true}return false}
+  _sc(a,b){if(!a)return true;const f=this._floor();if(!f)return false;for(const rm of f.rooms){for(const k of["temperature","humidity","occupancy"])for(const el of(rm.sensors?.[k]||[]))if(el.entity_id&&a.states[el.entity_id]?.state!==b.states[el.entity_id]?.state)return true;for(const el of(rm.sensors?.air_quality||[])){const eid=this._resolveAqEntity(el);if(eid&&a.states[eid]?.state!==b.states[eid]?.state)return true}for(const k of["lights","plugs","climate","windows"])for(const el of(rm[k]||[])){if(!el.entity_id)continue;const ea=a.states[el.entity_id],eb=b.states[el.entity_id];if(ea?.state!==eb?.state)return true;if(k==="lights"&&(ea?.attributes?.brightness!==eb?.attributes?.brightness||ea?.attributes?.color_temp!==eb?.attributes?.color_temp||(ea?.attributes?.rgb_color||[]).join()!==(eb?.attributes?.rgb_color||[]).join()))return true}for(const rd of(rm.radar||[]))for(let t=1;t<=(rd.max_targets||3);t++)for(const s of["x","y","direction"]){const eid=`sensor.${rd.entity_prefix}_target_${t}_${s}`;if(a.states[eid]?.state!==b.states[eid]?.state)return true}}return false}
 
   /* ── data ─────────────────────────────────────────────── */
   async _loadData(){
+    this._aqCache=null;
     try{this._areas=await this._hass.callWS({type:"config/area_registry/list"});this._entityReg=await this._hass.callWS({type:"config/entity_registry/list"});this._deviceReg=await this._hass.callWS({type:"config/device_registry/list"})}catch{}
     let has=false;
-    try{const r=await this._hass.callApi("GET","home_map/floor_plan");if(r?.floors?.length){this._floors=r.floors;this._upm=r.unitsPerMeter||DEFAULT_UPM;this._migrate();has=true}}catch{}
+    try{const r=await this._hass.callApi("GET","home_map/floor_plan");if(r?.floors?.length){this._floors=r.floors;this._upm=r.unitsPerMeter||DEFAULT_UPM;this._mig=r.migrations||{};this._migrate();has=true}}catch{}
     if(!has){await this._autoGen();this._debounceSave()}
     // Sync floor structure with HA (moves rooms between floors, reorders)
     await this._syncFloors();
+    this._seed();
     this._refreshTabs();this._scheduleRender();
   }
   async _syncFloors(){
@@ -190,7 +289,36 @@ class HomeMapPanel extends HTMLElement {
   _migrate(){let c=false;for(const f of this._floors)for(const rm of f.rooms){
     // Migrate to rects array
     if(!rm.rects){rm.rects=[{x:rm.x,y:rm.y,w:rm.w,h:rm.h}];c=true}
-    if(!rm.sensors)rm.sensors={};for(const k of["temperature","humidity","occupancy"]){const v=rm.sensors[k];if(typeof v==="string"){rm.sensors[k]=v?[{entity_id:v,x:.5,y:.5}]:[];c=true}else if(!Array.isArray(v))rm.sensors[k]=[]}for(const k of["lights","climate","windows"]){if(!rm[k]){rm[k]=[];continue}if(rm[k].length>0&&typeof rm[k][0]==="string"){const dy=k==="windows"?0:k==="climate"?.95:.3;rm[k]=rm[k].map((eid,i,a)=>({entity_id:eid,x:(i+1)/(a.length+1),y:dy}));c=true}}}if(c)this._debounceSave()}
+    if(!rm.sensors)rm.sensors={};for(const k of["temperature","humidity","air_quality","occupancy"]){const v=rm.sensors[k];if(typeof v==="string"){rm.sensors[k]=v?[{entity_id:v,x:.5,y:.5}]:[];c=true}else if(!Array.isArray(v))rm.sensors[k]=[]}for(const k of["lights","climate","windows"]){if(!rm[k]){rm[k]=[];continue}if(rm[k].length>0&&typeof rm[k][0]==="string"){const dy=k==="windows"?0:k==="climate"?.95:.3;rm[k]=rm[k].map((eid,i,a)=>({entity_id:eid,x:(i+1)/(a.length+1),y:dy}));c=true}}
+    if(!rm.radar){rm.radar=[];c=true}
+    if(!rm.plugs){rm.plugs=[];c=true}}if(c)this._debounceSave()}
+  /* One-off data seeds. Each runs once (flag stored in the floor plan) so deleting a seeded item sticks. */
+  _seed(){
+    const m=this._mig||(this._mig={});let changed=false;const st=this._hass.states;
+    const roomByArea=a=>{for(const f of this._floors)for(const rm of f.rooms)if(rm.area_id===a)return rm;return null};
+    if(!m.bathroom_temp){
+      const rm=roomByArea("bathroom");
+      if(!rm)console.error("home-map seed: no Bathroom room");
+      else for(const[k,eid]of[["temperature","sensor.bathroom_temp_humidity_temperature"],["humidity","sensor.bathroom_temp_humidity_humidity"]]){
+        if(!st[eid]){console.error("home-map seed: missing",eid);continue}
+        if(!rm.sensors[k].some(e=>e.entity_id===eid))rm.sensors[k].push({entity_id:eid,x:k==="temperature"?.76:.76,y:k==="temperature"?.5:.7});
+      }
+      if(rm)m.bathroom_temp=true;changed=true;
+    }
+    if(!m.plugs_seeded){
+      const groups={};let ok=true;
+      for(const[eid,area]of PLUG_SEED){
+        if(!st[eid]){console.error("home-map seed: missing plug",eid);continue}
+        const rm=roomByArea(area);if(!rm){console.error("home-map seed: no room for area",area,eid);ok=false;continue}
+        (groups[rm.id]||(groups[rm.id]={rm,list:[]})).list.push(eid);
+      }
+      for(const{rm,list}of Object.values(groups)){
+        list.forEach((eid,i)=>{if(!rm.plugs.some(e=>e.entity_id===eid))rm.plugs.push({entity_id:eid,x:(i+1)/(list.length+1),y:.12})});
+      }
+      if(ok)m.plugs_seeded=true;changed=true;
+    }
+    if(changed)this._debounceSave();
+  }
   async _autoGen(){
     let hf=[];try{hf=await this._hass.callWS({type:"config/floor_registry/list"})}catch{}
     hf.sort((a,b)=>(a.level||0)-(b.level||0));
@@ -199,24 +327,27 @@ class HomeMapPanel extends HTMLElement {
     if(un.length)this._floors.push({id:"other",name:"Other",rooms:this._layRooms(un)});
     if(!this._floors.length)this._floors=[{id:uid(),name:"Ground Floor",rooms:this._layRooms(this._areas||[])}];
   }
-  _layRooms(areas){const rooms=[],cols=Math.ceil(Math.sqrt(areas.length)),W=200,H=160,g=10;for(let i=0;i<areas.length;i++){const rx=(i%cols)*(W+g),ry=Math.floor(i/cols)*(H+g);rooms.push({id:uid(),name:areas[i].name,rects:[{x:rx,y:ry,w:W,h:H}],area_id:areas[i].area_id,sensors:{temperature:[],humidity:[],occupancy:[]},lights:[],climate:[],windows:[]})}return rooms}
-  async _save(){try{await this._hass.callApi("POST","home_map/floor_plan",{floors:this._floors,unitsPerMeter:this._upm})}catch(e){console.error("save fail",e)}}
+  _layRooms(areas){const rooms=[],cols=Math.ceil(Math.sqrt(areas.length)),W=200,H=160,g=10;for(let i=0;i<areas.length;i++){const rx=(i%cols)*(W+g),ry=Math.floor(i/cols)*(H+g);rooms.push({id:uid(),name:areas[i].name,rects:[{x:rx,y:ry,w:W,h:H}],area_id:areas[i].area_id,sensors:{temperature:[],humidity:[],air_quality:[],occupancy:[]},lights:[],climate:[],windows:[],radar:[]})}return rooms}
+  async _save(){try{await this._hass.callApi("POST","home_map/floor_plan",{floors:this._floors,unitsPerMeter:this._upm,migrations:this._mig||{}})}catch(e){console.error("save fail",e)}}
   _debounceSave(){clearTimeout(this._saveTimer);this._saveTimer=setTimeout(()=>this._save(),400)}
   _floor(){return this._floors[this._floorIdx]||null}
 
   /* ── DOM ──────────────────────────────────────────────── */
   _buildDom(){
     this.shadowRoot.innerHTML=`<style>
-:host{display:block;height:100%;font-family:${C.font}}*{box-sizing:border-box}
+:host{display:block;height:100dvh;font-family:${C.font}}*{box-sizing:border-box}
 .shell{display:flex;flex-direction:column;height:100%;background:${C.bg};color:${C.text}}
-.toolbar{display:flex;align-items:center;gap:6px;padding:8px 12px;background:${C.card};border-bottom:1px solid ${C.border};flex-wrap:wrap;min-height:48px}
+.toolbar{display:flex;align-items:center;gap:6px;padding:8px 12px;background:${C.card};border-bottom:1px solid ${C.border};box-shadow:0 2px 10px rgba(0,0,0,.18);flex-wrap:wrap;min-height:48px;position:relative;z-index:1}
 .toolbar .section{display:flex;gap:4px;align-items:center}.toolbar .sep{width:1px;height:28px;background:${C.border};margin:0 4px}
-.tab{padding:6px 14px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid rgba(186,192,202,.2);color:${C.textMid};transition:all .15s}
-.tab.active{background:${C.accent};color:#fff;border-color:${C.accent}}.tab:hover{color:${C.text}}.tab.add{font-size:18px;padding:4px 12px}
-.lbtn{padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;background:transparent;border:1px solid rgba(186,192,202,.2);color:${C.textMid};transition:all .15s}
+.tab{padding:6px 16px;border-radius:999px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
+.tab.active{background:${C.accent};color:#fff;border-color:${C.accent}}.tab:hover{color:${C.text}}.tab.add{font-size:18px;padding:4px 14px}
+.lbtn{padding:5px 12px;border-radius:999px;cursor:pointer;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
 .lbtn.on{background:${C.accent};color:#fff;border-color:${C.accent}}.lbtn:hover{color:${C.text}}
-.edit-btn{padding:6px 16px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid rgba(186,192,202,.2);color:${C.textMid};margin-left:auto;transition:all .15s}
+.aq-sel{padding:4px 8px;border-radius:999px;font-size:12px;font-weight:600;background:${C.bg};color:${C.text};border:1px solid ${C.btnBorder};font-family:${C.font};cursor:pointer}
+.edit-btn{padding:6px 18px;border-radius:999px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};margin-left:auto;transition:all .15s}
 .edit-btn.on{background:${C.coral};color:#fff;border-color:${C.coral}}
+.view3d-btn{padding:6px 18px;border-radius:999px;cursor:pointer;font-size:14px;font-weight:500;background:transparent;border:1px solid ${C.btnBorder};color:${C.textMid};transition:all .15s}
+.view3d-btn.on{background:${C.accent};color:#fff;border-color:${C.accent}}
 .main{display:flex;flex:1;overflow:hidden;position:relative}
 canvas{flex:1;display:block;cursor:default;min-width:0}
 .sidebar{width:420px;min-width:420px;background:${C.card};border-left:1px solid ${C.border};padding:16px;overflow-y:auto;display:none;flex-shrink:0;font-size:15px}
@@ -224,27 +355,47 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 .sidebar h3{margin:0 0 12px;font-size:22px;font-weight:600;color:${C.text}}.sidebar label{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:${C.textMuted};margin:14px 0 6px}
 .sidebar input,.sidebar select{width:100%;padding:10px 12px;border-radius:6px;font-size:16px;background:${C.bg};color:${C.text};border:1px solid ${C.border};font-family:${C.font}}
 .sidebar input:focus,.sidebar select:focus{outline:none;border-color:${C.accent};box-shadow:0 0 0 2px ${C.accentDim}}
-.sidebar .er{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:15px;padding:8px;border-radius:6px}.sidebar .er:hover{background:rgba(255,255,255,.04)}.sidebar .er[draggable]:active{opacity:.5}
-.sidebar .er .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}.sidebar .er .eid{flex:1;color:${C.text};font-size:14px;word-break:break-word}
+.sidebar .er{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:15px;padding:8px;border-radius:6px}.sidebar .er:hover{background:${C.hoverBg}}.sidebar .er[draggable]:active{opacity:.5}
+.sidebar .er .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}.sidebar .er .eid{flex:1;min-width:0;color:${C.text};font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sidebar .er .val{font-weight:600;white-space:nowrap;font-size:14px;color:${C.textMid};font-variant-numeric:tabular-nums}.sidebar .er .rm{cursor:pointer;color:${C.coral};font-size:22px;padding:0 6px;background:none;border:none}
 .sidebar button{padding:10px 16px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;background:${C.accentDim};color:${C.accent};border:1px solid rgba(123,97,255,.3);margin-top:8px;font-family:${C.font}}
 .sidebar button.danger{background:rgba(255,107,74,.15);color:${C.coral};border:1px solid rgba(255,107,74,.3)}
 .sidebar .fe{margin-top:16px;padding-top:12px;border-top:1px solid ${C.border}}
-.legend{position:absolute;bottom:12px;left:12px;display:flex;align-items:center;gap:8px;background:rgba(10,10,14,.85);backdrop-filter:blur(8px);padding:8px 14px;border-radius:999px;font-size:12px;color:${C.textMid};border:1px solid ${C.border};pointer-events:none}
+.legend{position:absolute;bottom:12px;left:12px;display:flex;align-items:center;gap:8px;background:${C.pillBg};padding:8px 12px;border-radius:10px;font-size:12px;color:${C.textMid};border:1px solid ${C.border};box-shadow:0 4px 16px rgba(0,0,0,.25);pointer-events:none}
 .legend canvas{border-radius:2px}
-.people-bar{position:absolute;top:12px;right:20px;display:flex;gap:12px;pointer-events:none}
+.people-bar{position:absolute;top:12px;left:12px;display:flex;gap:12px;pointer-events:none}
 .person-badge{display:flex;flex-direction:column;align-items:center;gap:2px}
 .person-badge .avatar{width:36px;height:36px;border-radius:50%;background:${C.accent};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff}
 .person-badge .pname{font-size:12px;color:${C.textMuted}}
+.entity-popover{position:absolute;background:${C.card};border:1px solid ${C.border};border-radius:12px;padding:14px 16px;min-width:200px;max-width:260px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:100;pointer-events:auto;font-family:${C.font}}
+.entity-popover .ep-name{font-size:14px;font-weight:600;color:${C.text};margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.entity-popover .ep-label{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:${C.textMuted};margin:10px 0 4px}
+.entity-popover input[type=range]{width:100%;accent-color:${C.accent};cursor:pointer;height:6px}
+.entity-popover input[type=color]{width:100%;height:32px;border:none;cursor:pointer;border-radius:6px;padding:0;background:transparent}
 </style>
 <div class="shell">
-<div class="toolbar"><div class="section" id="ft"></div><div class="sep"></div><div class="section" id="lb"></div><button class="edit-btn" id="eb">Edit</button></div>
-<div class="main"><canvas id="cv"></canvas><div class="sidebar" id="sb"></div><div class="legend" id="lg"></div><div class="people-bar" id="pb"></div></div>
+<div class="toolbar"><div class="section" id="ft"></div><div class="sep"></div><div class="section" id="lb"></div><button class="view3d-btn" id="v3d" style="margin-left:auto">3D</button><button class="edit-btn" id="eb">Edit</button></div>
+<div class="main"><canvas id="cv"></canvas><div class="sidebar" id="sb"></div><div class="legend" id="lg"></div><div class="people-bar" id="pb"></div><div class="entity-popover" id="ep"></div></div>
 </div>`;
-    const S=this.shadowRoot;this._cv=S.getElementById("cv");this._ctx=this._cv.getContext("2d");this._sb=S.getElementById("sb");this._lg=S.getElementById("lg");this._pb=S.getElementById("pb");
+    const S=this.shadowRoot;this._cv=S.getElementById("cv");this._ctx=this._cv.getContext("2d");this._sb=S.getElementById("sb");this._lg=S.getElementById("lg");this._pb=S.getElementById("pb");this._ep=S.getElementById("ep");this._ep.addEventListener("mouseenter",()=>{clearTimeout(this._popoverHideTimer);this._popoverHideTimer=null});this._ep.addEventListener("mouseleave",()=>{this._popoverHideTimer=setTimeout(()=>this._hideEntityPopover(),300)});
     const lc=S.getElementById("lb");
-    for(const L of LAYERS){const b=document.createElement("button");b.className="lbtn"+(this._layers[L.id]?" on":"");b.textContent=L.label;b.dataset.layer=L.id;b.addEventListener("click",()=>{this._layers[L.id]=!this._layers[L.id];b.classList.toggle("on",this._layers[L.id]);this._hmCache=null;this._scheduleRender();this._updateLegend()});lc.appendChild(b)}
-    S.getElementById("eb").addEventListener("click",()=>{this._editMode=!this._editMode;const eb=S.getElementById("eb");eb.classList.toggle("on",this._editMode);eb.textContent=this._editMode?"Done":"Edit";this._selRoom=null;this._selElem=null;this._mergeSet.clear();this._refreshTabs();this._renderSidebar();this._scheduleRender()});
+    for(const L of LAYERS){const b=document.createElement("button");b.className="lbtn"+(this._layers[L.id]?" on":"");b.textContent=L.label;b.dataset.layer=L.id;b.addEventListener("click",()=>{
+      if(HEATMAP_LAYERS.has(L.id)){
+        // Mutual exclusion: turning one heatmap on turns others off
+        const wasOn=this._layers[L.id];
+        for(const hk of HEATMAP_LAYERS){this._layers[hk]=false;const ob=lc.querySelector(`[data-layer="${hk}"]`);if(ob)ob.classList.remove("on")}
+        this._layers[L.id]=!wasOn;b.classList.toggle("on",this._layers[L.id]);
+      }else{
+        this._layers[L.id]=!this._layers[L.id];b.classList.toggle("on",this._layers[L.id]);
+      }
+      this._hmCache=null;this._scheduleRender();this._updateLegend();if(this._aqSel)this._aqSel.style.display=this._layers.air_quality?"inline-block":"none"});lc.appendChild(b);
+      if(L.id==="air_quality"){const sel=document.createElement("select");sel.className="aq-sel";sel.style.display=this._layers.air_quality?"inline-block":"none";for(const[k,m]of Object.entries(AQ_METRICS)){const o=document.createElement("option");o.value=k;o.textContent=m.label;if(k===this._aqMetric)o.selected=true;sel.appendChild(o)}sel.addEventListener("change",()=>{this._aqMetric=sel.value;this._hmCache=null;this._scheduleRender();this._updateLegend()});lc.appendChild(sel);this._aqSel=sel}}
+    S.getElementById("eb").addEventListener("click",()=>{this._editMode=!this._editMode;const eb=S.getElementById("eb");eb.classList.toggle("on",this._editMode);eb.textContent=this._editMode?"Done":"Edit";
+      if(this._editMode&&this._view3d){this._view3d=false;S.getElementById("v3d").classList.remove("on")}
+      this._selRoom=null;this._selElem=null;this._mergeSet.clear();this._refreshTabs();this._renderSidebar();this._scheduleRender()});
+    S.getElementById("v3d").addEventListener("click",()=>{this._view3d=!this._view3d;const b=S.getElementById("v3d");b.classList.toggle("on",this._view3d);
+      if(this._view3d&&this._editMode){this._editMode=false;S.getElementById("eb").classList.remove("on");S.getElementById("eb").textContent="Edit";this._selRoom=null;this._selElem=null;this._renderSidebar()}
+      this._userZoom=false;this._scheduleRender()});
     this._cv.addEventListener("mousedown",this._boundMouse.down);this._cv.addEventListener("mousemove",this._boundMouse.move);this._cv.addEventListener("mouseup",this._boundMouse.up);this._cv.addEventListener("mouseleave",this._boundMouse.up);
     // Prevent context menu on canvas
     this._cv.addEventListener("contextmenu",(e)=>e.preventDefault());
@@ -275,13 +426,21 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       e.preventDefault();
       try{
         const data=JSON.parse(e.dataTransfer.getData("text/plain"));
-        if(!data.eid||!data.sec||!data.cont||!this._selRoom)return;
+        if(!data.sec||!data.cont||!this._selRoom)return;
         const[sx,sy]=[e.offsetX,e.offsetY];
         const[wx,wy]=this._toWorld(sx,sy);
         const b=rmBounds(this._selRoom);
         const rx=clamp01((wx-b.x)/b.w), ry=clamp01((wy-b.y)/b.h);
-        const arr=data.cont==="sensors"?this._selRoom.sensors[data.sec]:this._selRoom[data.sec];
-        arr.push({entity_id:data.eid,x:rx,y:ry});
+        if(data.aqDevId){
+          // AQ device drop — add one anchor
+          if(!this._selRoom.sensors.air_quality)this._selRoom.sensors.air_quality=[];
+          if(!this._selRoom.sensors.air_quality.some(e=>e.device_id===data.aqDevId)){
+            this._selRoom.sensors.air_quality.push({entity_id:data.aqEid,device_id:data.aqDevId,x:rx,y:ry});
+          }
+        }else if(data.eid){
+          const arr=data.cont==="sensors"?this._selRoom.sensors[data.sec]:this._selRoom[data.sec];
+          arr.push({entity_id:data.eid,x:rx,y:ry});
+        }
         this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(this._selRoom);
       }catch{}
     });
@@ -294,7 +453,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
         // If an element is selected, delete that element, not the room
         if(this._selElem){
           const rm=this._selRoom;
-          const arr=["temperature","humidity","occupancy"].includes(this._selElem.type)?rm.sensors[this._selElem.type]:rm[this._selElem.type];
+          const arr=["temperature","humidity","air_quality","occupancy"].includes(this._selElem.type)?rm.sensors[this._selElem.type]:rm[this._selElem.type];
           if(arr&&this._selElem.index<arr.length){
             arr.splice(this._selElem.index,1);
             this._selElem=null;this._hmCache=null;
@@ -317,14 +476,15 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 
   _refreshTabs(){const c=this.shadowRoot.getElementById("ft");if(!c)return;c.innerHTML="";this._floors.forEach((f,i)=>{const b=document.createElement("button");b.className="tab"+(i===this._floorIdx?" active":"");b.textContent=f.name;b.addEventListener("click",()=>{this._floorIdx=i;this._selRoom=null;this._selElem=null;this._hmCache=null;this._refreshTabs();this._renderSidebar();this._scheduleRender()});c.appendChild(b)});if(this._editMode){const ab=document.createElement("button");ab.className="tab add";ab.textContent="+";ab.addEventListener("click",()=>{const n=prompt("Floor name:",`Floor ${this._floors.length+1}`);if(!n)return;this._floors.push({id:uid(),name:n,rooms:[]});this._floorIdx=this._floors.length-1;this._debounceSave();this._refreshTabs();this._scheduleRender()});c.appendChild(ab)}}
 
-  _updateLegend(){const l=this._lg;if(!l)return;l.innerHTML="";const a=this._layers.temperature?"temperature":this._layers.humidity?"humidity":null;if(!a){l.style.display="none";return}l.style.display="flex";
-    const isT=a==="temperature";const u=isT?"\u00b0C":"%";
+  _updateLegend(){const l=this._lg;if(!l)return;l.innerHTML="";const a=this._layers.temperature?"temperature":this._layers.humidity?"humidity":this._layers.air_quality?"air_quality":null;if(!a){l.style.display="none";return}l.style.display="flex";
+    const aqM=a==="air_quality"?AQ_METRICS[this._aqMetric]:null;
+    const u=a==="temperature"?"\u00b0C":a==="humidity"?"%":aqM?aqM.unit:"";
     // Use dynamic range if available, otherwise defaults
     const range=this._hmRange&&this._hmRange.type===a?this._hmRange:null;
-    const lo=range?range.min:(isT?TEMP_MIN:HUM_MIN);
-    const hi=range?range.max:(isT?TEMP_MAX:HUM_MAX);
-    const fn=isT?(v)=>tempToRgb(v,lo,hi):(v)=>humToRgb(v,lo,hi);
-    l.appendChild(Object.assign(document.createElement("span"),{textContent:`${lo.toFixed(1)}${u}`}));const bar=document.createElement("canvas");bar.width=160;bar.height=16;const bc=bar.getContext("2d");for(let x=0;x<160;x++){const[r,g,b]=fn(lo+(x/159)*(hi-lo));bc.fillStyle=`rgb(${r},${g},${b})`;bc.fillRect(x,0,1,16)}l.appendChild(bar);l.appendChild(Object.assign(document.createElement("span"),{textContent:`${hi.toFixed(1)}${u}`}))}
+    const lo=range?range.min:(a==="temperature"?TEMP_MIN:a==="humidity"?HUM_MIN:aqM.min);
+    const hi=range?range.max:(a==="temperature"?TEMP_MAX:a==="humidity"?HUM_MAX:aqM.max);
+    const fn=a==="temperature"?(v)=>tempToRgb(v,lo,hi):a==="humidity"?(v)=>humToRgb(v,lo,hi):(v)=>aqToRgb(v,lo,hi,aqM.stops);
+    l.appendChild(Object.assign(document.createElement("span"),{textContent:`${lo}${u}`}));const bar=document.createElement("canvas");bar.width=160;bar.height=16;const bc=bar.getContext("2d");for(let x=0;x<160;x++){const[r,g,b]=fn(lo+(x/159)*(hi-lo));bc.fillStyle=`rgb(${r},${g},${b})`;bc.fillRect(x,0,1,16)}l.appendChild(bar);l.appendChild(Object.assign(document.createElement("span"),{textContent:`${hi}${u}`}))}
 
   _updatePeople(){
     const pb=this._pb;if(!pb||!this._hass)return;
@@ -359,22 +519,170 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _toScreen(wx,wy){return[wx*this._scale+this._panX,wy*this._scale+this._panY]}
   _elemWorld(rm,el){const b=rmBounds(rm);return[b.x+el.x*b.w,b.y+el.y*b.h]}
 
+  /* ── 3D isometric view ───────────────────────────────────
+   * Extrudes each room's floor rects into a simple massing block (no real
+   * geometry/openings, no photos — see home-map README for why). */
+  _autoFit3D(f){
+    const H=2.4*this._upm;
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+    const pts=[];
+    for(const rm of f.rooms)for(const r of rmRects(rm))
+      pts.push([r.x,r.y,0],[r.x+r.w,r.y,0],[r.x,r.y+r.h,0],[r.x+r.w,r.y+r.h,0],
+                [r.x,r.y,H],[r.x+r.w,r.y,H],[r.x,r.y+r.h,H],[r.x+r.w,r.y+r.h,H]);
+    if(!pts.length){this._scale3d=1;this._panX3d=this._cvW/2;this._panY3d=this._cvH/2;return}
+    for(const[wx,wy,wz]of pts){const px=(wx-wy)*.866,py=(wx+wy)*.5-wz;x0=Math.min(x0,px);x1=Math.max(x1,px);y0=Math.min(y0,py);y1=Math.max(y1,py)}
+    const fw=x1-x0,fh=y1-y0;if(fw<=0||fh<=0){this._scale3d=1;this._panX3d=this._cvW/2;this._panY3d=this._cvH/2;return}
+    this._scale3d=Math.min((this._cvW-PAD*2)/fw,(this._cvH-PAD*2)/fh,3);
+    this._panX3d=(this._cvW-fw*this._scale3d)/2-x0*this._scale3d;
+    this._panY3d=(this._cvH-fh*this._scale3d)/2-y0*this._scale3d;
+  }
+  _iso3(wx,wy,wz){const s=this._scale3d;return[(wx-wy)*.866*s+this._panX3d,(wx+wy)*.5*s-wz*s+this._panY3d]}
+  _shade(rgba,amt){const m=rgba.match(/rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)/);if(!m)return rgba;const f=v=>Math.max(0,Math.min(255,Math.round(+v+255*amt)));return`rgba(${f(m[1])},${f(m[2])},${f(m[3])},${m[4]??1})`}
+  _shadeA(rgba,amt,a){const m=rgba.match(/rgba?\((\d+),(\d+),(\d+)/);if(!m)return rgba;const f=v=>Math.max(0,Math.min(255,Math.round(+v+255*amt)));return`rgba(${f(m[1])},${f(m[2])},${f(m[3])},${a})`}
+  /* The 3D view is a cut-away: low walls so everything inside stays visible. Every 2D layer is drawn here too. */
+  _draw3D(ctx,f){
+    this._autoFit3D(f);this._hits3d=[];
+    const WH=.55*this._upm,L=this._layers;
+    const rooms=[...f.rooms].sort((a,b)=>{const ba=rmBounds(a),bb=rmBounds(b);return(ba.x+ba.w/2+ba.y+ba.h/2)-(bb.x+bb.w/2+bb.y+bb.h/2)});
+    const poly=(pts,fill,stroke)=>{ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke()}};
+    // which heat layer colours the floors
+    const hType=L.temperature?"temperature":L.humidity?"humidity":L.air_quality?"air_quality":null;
+    const aqM=hType==="air_quality"?AQ_METRICS[this._aqMetric]:null;
+    let lo=0,hi=1,colorFn=null;
+    if(hType==="temperature"){lo=0;hi=30;colorFn=v=>tempToRgb(v,lo,hi)}else if(hType==="humidity"){lo=0;hi=100;colorFn=v=>humToRgb(v,lo,hi)}else if(aqM){lo=aqM.min;hi=aqM.max;colorFn=v=>aqToRgb(v,lo,hi,aqM.stops)}
+    this._hmRange=hType?{min:lo,max:hi,type:hType}:null;
+    const sensorVals=(rm,type)=>(rm.sensors?.[type]||[]).map(el=>{const eid=type==="air_quality"?this._resolveAqEntity(el):el.entity_id;const s=eid?this._hass.states[eid]:null;const v=s?parseFloat(s.state):NaN;return{el,eid,v}});
+    const at=(rm,el,z)=>{const[wx,wy]=this._elemWorld(rm,el);return this._iso3(wx,wy,z||0)};
+    // floors
+    for(const rm of rooms){
+      let fill=C.room3d;
+      if(colorFn){const vs=sensorVals(rm,hType).map(x=>x.v).filter(v=>!isNaN(v));if(vs.length){const[r,g,b]=colorFn(vs.reduce((a,b)=>a+b,0)/vs.length);fill=`rgba(${r},${g},${b},.6)`}}
+      rm._fill3d=fill;
+      for(const r of rmRects(rm))poly([this._iso3(r.x,r.y,0),this._iso3(r.x+r.w,r.y,0),this._iso3(r.x+r.w,r.y+r.h,0),this._iso3(r.x,r.y+r.h,0)],fill);
+    }
+    for(const rm of rooms){
+      const isSel=rm===this._selRoom;
+      // walls: only the outer boundary, only the two faces that point at the viewer
+      const wallA=C.room3d.includes("94,100")?.92:.95;
+      for(const e of rmOuterEdges(rm)){
+        const a=[this._iso3(e.x0,e.y0,0),this._iso3(e.x1,e.y1,0)],b=[this._iso3(e.x1,e.y1,WH),this._iso3(e.x0,e.y0,WH)];
+        const front=e.ny===1||e.nx===1;
+        if(front){if(isSel){ctx.save();ctx.shadowColor="rgba(123,97,255,.5)";ctx.shadowBlur=14}
+          poly([a[0],a[1],b[0],b[1]],this._shadeA(C.room3d,e.ny===1?-.12:-.22,wallA),C.wallStroke);if(isSel)ctx.restore()}
+        else{ctx.strokeStyle=C.wallStroke;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(a[0][0],a[0][1]);ctx.lineTo(a[1][0],a[1][1]);ctx.stroke()}
+      }
+      const b=rmBounds(rm);const[lx,ly]=this._iso3(b.x+b.w/2,b.y+b.h/2,0);
+      ctx.textAlign="center";ctx.textBaseline="middle";
+      ctx.save();ctx.shadowColor="rgba(0,0,0,.6)";ctx.shadowBlur=4;ctx.fillStyle=C.text;ctx.font=`600 13px ${C.font}`;ctx.fillText(rm.name||"?",lx,ly);ctx.restore();
+      // lights: glow on the floor + marker
+      if(L.lights)for(const el of(rm.lights||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        const on=s.state==="on";
+        if(on){const bri=(s.attributes?.brightness||255)/255,rgb=s.attributes?.rgb_color||[255,210,80];const rad=(70+50*bri)*this._scale3d/2;
+          ctx.save();ctx.translate(px,py);ctx.scale(1,.5);const g=ctx.createRadialGradient(0,0,0,0,0,rad);g.addColorStop(0,`rgba(${rgb[0]},${rgb[1]},${rgb[2]},${.3+.4*bri})`);g.addColorStop(1,`rgba(${rgb[0]},${rgb[1]},${rgb[2]},0)`);ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,rad,0,Math.PI*2);ctx.fill();ctx.restore()}
+        this._stem(ctx,px,py);ctx.beginPath();ctx.arc(px,py-14,12,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();ctx.strokeStyle=on?ELEM_COL.lights:C.pillBorder;ctx.lineWidth=on?2:1;ctx.stroke();drawIcon(ctx,"lights",px,py-14,14,on);
+        this._hits3d.push({x:px,y:py-14,el,type:"lights"});
+      }
+      if(L.plugs)for(const el of(rm.plugs||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        this._stem(ctx,px,py);this._plugMarker(ctx,px,py-14,s.state);this._hits3d.push({x:px,y:py-14,el,type:"plugs"});
+      }
+      if(L.heating)for(const el of(rm.climate||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        const active=s.state==="heat"&&s.attributes?.temperature>(s.attributes?.current_temperature||0);
+        if(active){ctx.save();ctx.translate(px,py);ctx.scale(1,.5);const g=ctx.createRadialGradient(0,0,0,0,0,40);g.addColorStop(0,"rgba(255,60,20,.35)");g.addColorStop(1,"rgba(255,60,20,0)");ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,40,0,Math.PI*2);ctx.fill();ctx.restore()}
+        this._stem(ctx,px,py);ctx.beginPath();ctx.arc(px,py-14,13,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();drawIcon(ctx,"climate",px,py-14,16,active);
+        const t=s.attributes?.temperature,c2=s.attributes?.current_temperature;if(t!=null)this._pill(ctx,px,py-36,c2!=null?`${c2}→${t}°`:`→${t}°`,active?C.coral:C.textMuted);
+      }
+      if(L.windows)for(const el of(rm.windows||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+        if(!s){drawMissingEntity(ctx,px,py-14);continue}
+        const open=s.state==="on";this._stem(ctx,px,py);ctx.beginPath();ctx.arc(px,py-14,13,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();drawIcon(ctx,"windows",px,py-14,open?18:14,open);
+        if(open)this._pill(ctx,px,py-36,"Open",C.coral);else{ctx.beginPath();ctx.arc(px,py-1,3,0,Math.PI*2);ctx.fillStyle=C.green;ctx.fill()}
+      }
+      // heat-layer values
+      if(hType){const unit=hType==="temperature"?"°C":hType==="humidity"?"%":aqM.unit;const col=hType==="temperature"?C.amber:hType==="humidity"?"#2196f3":"#9c27b0";
+        for(const{el,eid,v}of sensorVals(rm,hType)){const[px,py]=at(rm,el,0);
+          if(eid===null){this._pill(ctx,px,py-12,"n/a",C.textMuted);continue}
+          if(!this._hass.states[eid]){drawMissingEntity(ctx,px,py-12);continue}
+          if(isNaN(v))continue;this._pill(ctx,px,py-12,`${v.toFixed(1)}${unit}`,col)}}
+      // people
+      if(L.occupancy){
+        for(const el of(rm.sensors?.occupancy||[])){const s=this._hass.states[el.entity_id];const[px,py]=at(rm,el,0);
+          if(!s){drawMissingEntity(ctx,px,py-14);continue}
+          this._figure(ctx,px,py,s.state==="on"||parseFloat(s.state)>0)}
+        this._radarTargets(rm,(wx,wy)=>{const[px,py]=this._iso3(wx,wy,0);this._figure(ctx,px,py,true)});
+      }
+    }
+    if(L.solar){this._drawRoof3D(ctx,f);this._drawSolarHud(ctx)}
+  }
+  _stem(ctx,px,py){ctx.strokeStyle="rgba(186,192,202,.35)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(px,py-2);ctx.stroke();ctx.fillStyle="rgba(0,0,0,.35)";ctx.beginPath();ctx.ellipse(px,py,7,3.5,0,0,Math.PI*2);ctx.fill()}
+  /* standing person: head + body, green when someone is there */
+  _figure(ctx,px,py,on){
+    const col=on?ELEM_COL.occupancy:"rgba(150,150,150,.5)";
+    ctx.fillStyle="rgba(0,0,0,.3)";ctx.beginPath();ctx.ellipse(px,py,9,4.5,0,0,Math.PI*2);ctx.fill();
+    if(on){ctx.save();ctx.translate(px,py);ctx.scale(1,.5);const g=ctx.createRadialGradient(0,0,0,0,0,28);g.addColorStop(0,"rgba(76,175,80,.35)");g.addColorStop(1,"rgba(76,175,80,0)");ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,28,0,Math.PI*2);ctx.fill();ctx.restore()}
+    const s=on?1:.7;ctx.fillStyle=col;
+    ctx.beginPath();ctx.roundRect(px-5*s,py-22*s,10*s,17*s,5*s);ctx.fill();
+    ctx.beginPath();ctx.arc(px,py-27*s,5*s,0,Math.PI*2);ctx.fill();
+  }
+  /* solar array on the roof of the top floor */
+  _drawRoof3D(ctx,f){
+    if(this._floorIdx!==this._floors.length-1||!f.rooms.length)return;
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;for(const rm of f.rooms){const b=rmBounds(rm);x0=Math.min(x0,b.x);y0=Math.min(y0,b.y);x1=Math.max(x1,b.x+b.w);y1=Math.max(y1,b.y+b.h)}
+    const z=2.4*this._upm,ax=x0+(x1-x0)*.1,ay=y0+(y1-y0)*.08,aw=(x1-x0)*.45,ah=(y1-y0)*.3;
+    const v=this._solarVals();const live=v.pv!=null&&v.pv>0.01;
+    const cols=4,rows=2;
+    for(let i=0;i<cols;i++)for(let j=0;j<rows;j++){
+      const cx0=ax+aw*i/cols+2,cy0=ay+ah*j/rows+2,cw=aw/cols-4,ch=ah/rows-4;
+      ctx.beginPath();[[cx0,cy0],[cx0+cw,cy0],[cx0+cw,cy0+ch],[cx0,cy0+ch]].forEach(([x,y],k)=>{const[px,py]=this._iso3(x,y,z);k?ctx.lineTo(px,py):ctx.moveTo(px,py)});ctx.closePath();
+      ctx.fillStyle=live?"rgba(60,110,200,.9)":"rgba(40,60,110,.85)";ctx.fill();ctx.strokeStyle="rgba(190,200,220,.6)";ctx.lineWidth=1;ctx.stroke();
+    }
+    const[cx,cy]=this._iso3(ax+aw/2,ay+ah/2,z);
+    this._pill(ctx,cx,cy-22,v.pv==null?"Solar –":`Solar ${v.pv.toFixed(2)} kW`,live?ELEM_COL.lights:C.textMuted);
+  }
+  /* radar target positions in world units, shared by the 2D and 3D views */
+  _radarTargets(rm,cb){
+    if(!rm.radar||!rm.radar.length)return;const b=rmBounds(rm);
+    for(const radar of rm.radar){
+      const prefix=radar.entity_prefix;if(!prefix)continue;
+      const rot=(radar.rotation||0)*Math.PI/180,cosR=Math.cos(rot),sinR=Math.sin(rot);
+      const sx=b.x+(radar.x||.5)*b.w,sy=b.y+(radar.y||0)*b.h;
+      for(let t=1;t<=(radar.max_targets||3);t++){
+        const xs=this._hass.states[`sensor.${prefix}_target_${t}_x`],ys=this._hass.states[`sensor.${prefix}_target_${t}_y`],ds=this._hass.states[`sensor.${prefix}_target_${t}_direction`];
+        if(!xs||!ys)continue;const tx=parseFloat(xs.state),ty=parseFloat(ys.state);
+        if(isNaN(tx)||isNaN(ty)||(tx===0&&ty===0)||ds?.state==="NA")continue;
+        const ux=tx/1000*this._upm,uy=ty/1000*this._upm;
+        cb(sx+ux*cosR+uy*sinR,sy-ux*sinR+uy*cosR);
+      }
+    }
+  }
+  _hit3(sx,sy){let best=null,bd=18;for(const h of(this._hits3d||[])){const d=Math.hypot(sx-h.x,sy-h.y);if(d<bd){bd=d;best=h}}return best}
+
   /* ── draw ─────────────────────────────────────────────── */
   _draw(){
     const ctx=this._ctx,dpr=this._dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,this._cvW,this._cvH);
-    this._autoFit();const f=this._floor();if(!f)return;
+    // Canvas not laid out yet (hidden tab, mid-resize): nothing fits inside PAD, and the fit scale
+    // would go negative. The ResizeObserver redraws once it has a real size.
+    if(this._cvW<=PAD*2||this._cvH<=PAD*2)return;
+    const f=this._floor();if(!f)return;
+    if(this._view3d){this._draw3D(ctx,f);this._updatePeople();this._updateLegend();return}
+    this._autoFit();
     if(this._editMode)this._drawGrid(ctx);
-    if(this._layers.temperature||this._layers.humidity)this._drawHeatMap(ctx,f);
+    if(this._layers.temperature||this._layers.humidity||this._layers.air_quality)this._drawHeatMap(ctx,f);
     if(this._layers.lights)this._drawLights(ctx,f);
     this._drawRooms(ctx,f);
     if(this._layers.temperature)this._drawValues(ctx,f,"temperature","\u00b0C");
     if(this._layers.humidity)this._drawValues(ctx,f,"humidity","%");
+    if(this._layers.air_quality){const m=AQ_METRICS[this._aqMetric];this._drawValues(ctx,f,"air_quality",m.unit,true)}
+    if(this._layers.plugs)this._drawPlugs(ctx,f);
     if(this._layers.heating)this._drawHeating(ctx,f);
     if(this._layers.windows)this._drawWindows(ctx,f);
     if(this._layers.occupancy)this._drawOccupancy(ctx,f);
+    if(this._layers.occupancy)this._drawRadarTargets(ctx,f);
     this._drawLabels(ctx,f);
     if(this._editMode){this._drawDimensions(ctx,f);this._drawElements(ctx,f);if(this._selRoom)this._drawHandles(ctx,this._selRoom)}
     this._drawScaleBar(ctx);
+    if(this._layers.solar)this._drawSolarHud(ctx);
     if(this._editMode&&(this._action==="resize"||this._action==="move")&&this._selRoom)this._drawEdgeDims(ctx,this._selRoom);
     if(this._action==="draw"&&this._actionData.preview){const p=this._actionData.preview;const[sx,sy]=this._toScreen(p.x,p.y);ctx.strokeStyle="rgba(123,97,255,.7)";ctx.lineWidth=1.5;ctx.setLineDash([6,4]);ctx.strokeRect(sx,sy,p.w*this._scale,p.h*this._scale);ctx.setLineDash([]);this._drawEdgeDims(ctx,p)}
     this._updatePeople();
@@ -384,15 +692,25 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _drawGrid(ctx){const gs=GRID*this._scale;if(gs<4)return;const ms=this._upm*this._scale;ctx.strokeStyle="rgba(186,192,202,.04)";ctx.lineWidth=.5;const ox=this._panX%gs,oy=this._panY%gs;for(let x=ox;x<this._cvW;x+=gs){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,this._cvH);ctx.stroke()}for(let y=oy;y<this._cvH;y+=gs){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(this._cvW,y);ctx.stroke()}if(ms>20){ctx.strokeStyle="rgba(123,97,255,.08)";ctx.lineWidth=1;const mx=this._panX%ms,my=this._panY%ms;for(let x=mx;x<this._cvW;x+=ms){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,this._cvH);ctx.stroke()}for(let y=my;y<this._cvH;y+=ms){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(this._cvW,y);ctx.stroke()}}}
 
   _drawRooms(ctx,f){for(const rm of f.rooms){const isSel=rm===this._selRoom;const isMerge=this._mergeSet.has(rm);
-    // Selected room: subtle glow
-    if(isSel){ctx.save();ctx.shadowColor="rgba(123,97,255,.35)";ctx.shadowBlur=20}
+    // Ambient depth shadow under every room, independent of selection
+    ctx.save();ctx.shadowColor="rgba(0,0,0,.28)";ctx.shadowBlur=14;ctx.shadowOffsetY=3;
+    // Selected room: accent glow stacked on top of the ambient shadow
+    if(isSel){ctx.shadowColor="rgba(123,97,255,.4)";ctx.shadowBlur=22;ctx.shadowOffsetY=0}
     ctx.fillStyle=isMerge?"rgba(229,166,32,.06)":C.roomFill;
     ctx.strokeStyle=isSel?C.wallStrokeSel:isMerge?"rgba(229,166,32,.5)":C.wallStroke;
-    ctx.lineWidth=isSel?2:1.5;ctx.lineJoin="round";
-    for(const r of rmRects(rm)){const[sx,sy]=this._toScreen(r.x,r.y);const rw=r.w*this._scale,rh=r.h*this._scale;const g=ctx.createLinearGradient(0,sy,0,sy+rh);g.addColorStop(0,isMerge?"rgba(229,166,32,.09)":"rgba(186,192,202,.08)");g.addColorStop(1,isMerge?"rgba(229,166,32,.03)":"rgba(186,192,202,.025)");ctx.fillStyle=g;ctx.fillRect(sx,sy,rw,rh);ctx.strokeRect(sx,sy,rw,rh)}
-    if(isSel)ctx.restore()}}
+    ctx.lineWidth=isSel?1.5:1;
+    const rad=Math.min(10,this._scale*.3);
+    const rs=rmRects(rm);
+    if(rs.length===1){const r=rs[0];const[sx,sy]=this._toScreen(r.x,r.y);const sw=r.w*this._scale,sh=r.h*this._scale;
+      ctx.beginPath();ctx.roundRect(sx,sy,sw,sh,Math.min(rad,sw/2,sh/2));ctx.fill();ctx.stroke()}
+    else{
+      // One room made of several blocks: fill the blocks, stroke only the outer outline so no seam shows between them
+      ctx.beginPath();for(const r of rs){const[sx,sy]=this._toScreen(r.x,r.y);ctx.rect(sx,sy,r.w*this._scale,r.h*this._scale)}ctx.fill();
+      ctx.beginPath();for(const e of rmOuterEdges(rm)){const[ax,ay]=this._toScreen(e.x0,e.y0),[bx,by]=this._toScreen(e.x1,e.y1);ctx.moveTo(ax,ay);ctx.lineTo(bx,by)}ctx.stroke();
+    }
+    ctx.restore()}}
 
-  _drawLabels(ctx,f){ctx.textAlign="center";ctx.textBaseline="middle";for(const rm of f.rooms){const b=rmBounds(rm);const big=rmRects(rm).reduce((m,r)=>r.w*r.h>m.w*m.h?r:m);const[cx,cy0]=this._toScreen(big.x+big.w/2,big.y);const cy=cy0+16;const fs=Math.max(11,Math.min(15,b.w*this._scale*.09));ctx.font=`600 ${fs}px ${C.font}`;ctx.save();ctx.letterSpacing="1.5px";ctx.shadowColor="rgba(0,0,0,.8)";ctx.shadowBlur=6;ctx.fillStyle=C.textMid;ctx.fillText((rm.name||"?").toUpperCase(),cx,cy,big.w*this._scale-12);ctx.restore()}}
+  _drawLabels(ctx,f){ctx.textAlign="center";ctx.textBaseline="middle";for(const rm of f.rooms){const b=rmBounds(rm);const[cx,cy]=this._toScreen(b.x+b.w/2,b.y+b.h/2);const fs=Math.max(13,Math.min(20,b.w*this._scale*.12));ctx.font=`600 ${fs}px ${C.font}`;ctx.save();ctx.shadowColor="rgba(0,0,0,.6)";ctx.shadowBlur=4;ctx.fillStyle=C.text;ctx.fillText(rm.name||"?",cx,cy,b.w*this._scale-12);ctx.restore()}}
 
   _drawDimensions(ctx,f){ctx.textAlign="center";ctx.textBaseline="bottom";ctx.font=`500 13px ${C.font}`;ctx.fillStyle=C.textMuted;for(const rm of f.rooms){for(const r of rmRects(rm)){const wm=(r.w/this._upm).toFixed(1),hm=(r.h/this._upm).toFixed(1);const[cx,cy]=this._toScreen(r.x+r.w/2,r.y+r.h);ctx.fillText(`${wm} \u00d7 ${hm}m`,cx,cy-4)}}}
 
@@ -404,7 +722,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     ctx.font=`600 14px ${C.font}`;ctx.fillStyle=C.accent;
     // width on top
     ctx.textAlign="center";ctx.textBaseline="bottom";
-    const pill=(text,x,y)=>{const tw=ctx.measureText(text).width+12;ctx.fillStyle="rgba(6,6,8,.85)";ctx.beginPath();ctx.roundRect(x-tw/2,y-22,tw,24,4);ctx.fill();ctx.fillStyle=C.accent;ctx.fillText(text,x,y-2)};
+    const pill=(text,x,y)=>{const tw=ctx.measureText(text).width+12;ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(x-tw/2,y-22,tw,24,4);ctx.fill();ctx.fillStyle=C.accent;ctx.fillText(text,x,y-2)};
     pill(`${wm}m`,sx+sw/2,sy-2);
     // height on left
     ctx.save();ctx.translate(sx-4,sy+sh/2);ctx.rotate(-Math.PI/2);pill(`${hm}m`,0,0);ctx.restore();
@@ -414,7 +732,12 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 
   /* ── heatmap ──────────────────────────────────────────── */
   _drawHeatMap(ctx,f){
-    const type=this._layers.temperature?"temperature":"humidity";
+    const type=this._layers.temperature?"temperature":this._layers.humidity?"humidity":this._layers.air_quality?"air_quality":null;
+    if(!type)return;
+
+    // For AQ, determine which sub-metric to show
+    const aqM=type==="air_quality"?AQ_METRICS[this._aqMetric]:null;
+    const aqDcSet=aqM?new Set(aqM.dc):null;
 
     // Build per-room sensor data
     const roomData=[];
@@ -422,7 +745,9 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     for(const rm of f.rooms){
       const sensors=[];
       for(const el of(rm.sensors?.[type]||[])){
-        const s=this._hass.states[el.entity_id];if(!s||isNaN(parseFloat(s.state)))continue;
+        // For AQ anchors, resolve to the entity matching the selected metric
+        const eid=aqM?this._resolveAqEntity(el):el.entity_id;
+        const s=this._hass.states[eid];if(!s||isNaN(parseFloat(s.state)))continue;
         const[wx,wy]=this._elemWorld(rm,el);
         const v=parseFloat(s.state);sensors.push({wx,wy,v});allVals.push(v);
       }
@@ -431,17 +756,15 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     }
     if(!allVals.length)return;
 
-    // Fixed absolute scales: temp 0–30°C, humidity 0–100%
+    // Fixed absolute scales
     let vMin,vMax;
-    if(type==="temperature"){
-      vMin=0;vMax=30;
-    }else{
-      vMin=0;vMax=100;
-    }
+    if(type==="temperature"){vMin=0;vMax=30}
+    else if(type==="humidity"){vMin=0;vMax=100}
+    else{vMin=aqM.min;vMax=aqM.max}
     this._hmRange={min:vMin,max:vMax,type};
-    const fn=type==="temperature"?(v)=>tempToRgb(v,vMin,vMax):(v)=>humToRgb(v,vMin,vMax);
+    const fn=type==="temperature"?(v)=>tempToRgb(v,vMin,vMax):type==="humidity"?(v)=>humToRgb(v,vMin,vMax):(v)=>aqToRgb(v,vMin,vMax,aqM.stops);
 
-    const key=type+"|"+allVals.join(",")+`|${this._scale}|${this._panX}|${this._panY}|${this._cvW}|${this._cvH}`;
+    const key=type+"|"+(aqM?this._aqMetric:"")+"|"+allVals.join(",")+`|${this._scale}|${this._panX}|${this._panY}|${this._cvW}|${this._cvH}`;
     if(this._hmKey===key&&this._hmCache){ctx.putImageData(this._hmCache,0,0);return}
 
     const w=Math.max(1,Math.ceil(this._cvW/HEATMAP_RES)),h=Math.max(1,Math.ceil(this._cvH/HEATMAP_RES));
@@ -470,7 +793,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
           val=wV/wS;
         }
         const[r,g,b]=fn(val);
-        const idx=(py*w+px)*4;d[idx]=r;d[idx+1]=g;d[idx+2]=b;d[idx+3]=125;
+        const idx=(py*w+px)*4;d[idx]=r;d[idx+1]=g;d[idx+2]=b;d[idx+3]=150;
       }
     }
     oc.putImageData(img,0,0);ctx.save();ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
@@ -480,23 +803,54 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   }
 
   /* ── sensor values ────────────────────────────────────── */
-  _drawValues(ctx,f,type,unit){
+  _drawValues(ctx,f,type,unit,resolveAq){
     ctx.font=`600 13px ${C.font}`;ctx.textAlign="center";ctx.textBaseline="middle";
-    const accent=type==="temperature"?C.amber:"#2196f3";
+    const accent=type==="temperature"?C.amber:type==="humidity"?"#2196f3":"#9c27b0";
     for(const rm of f.rooms)for(const el of(rm.sensors?.[type]||[])){
-      const s=this._hass.states[el.entity_id];if(!s||isNaN(parseFloat(s.state)))continue;
+      const eid=resolveAq?this._resolveAqEntity(el):el.entity_id;
       const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
+      if(eid===null){this._pill(ctx,cx,cy,"n/a",C.textMuted);continue}
+      const s=this._hass.states[eid];
+      if(!s){drawMissingEntity(ctx,cx,cy);continue;}if(isNaN(parseFloat(s.state)))continue;
       const text=`${parseFloat(s.state).toFixed(1)}${unit}`;const tw=ctx.measureText(text).width+14;
       const ph=22,pr=11;
-      ctx.save();ctx.shadowColor="rgba(0,0,0,.5)";ctx.shadowBlur=8;ctx.shadowOffsetY=2;ctx.fillStyle="rgba(10,10,14,.88)";ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.fill();ctx.restore();
-      ctx.strokeStyle="rgba(186,192,202,.2)";ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.stroke();
+      ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.fill();
+      ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-ph/2,tw,ph,pr);ctx.stroke();
       ctx.fillStyle=accent;ctx.fillText(text,cx,cy);
     }
   }
 
+  _pill(ctx,cx,cy,text,col){ctx.font=`600 13px ${C.font}`;ctx.textAlign="center";ctx.textBaseline="middle";const tw=ctx.measureText(text).width+14;ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(cx-tw/2,cy-11,tw,22,11);ctx.fill();ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=col;ctx.fillText(text,cx,cy)}
+
+  /* ── plugs ────────────────────────────────────────────── */
+  _drawPlugs(ctx,f){for(const rm of f.rooms)for(const el of(rm.plugs||[])){
+    const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
+    const s=this._hass.states[el.entity_id];if(!s){drawMissingEntity(ctx,cx,cy);continue}
+    this._plugMarker(ctx,cx,cy,s.state)}}
+  _plugMarker(ctx,cx,cy,state){
+    const on=state==="on",bad=state==="unavailable"||state==="unknown";
+    ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
+    ctx.strokeStyle=on?ELEM_COL.plugs:C.pillBorder;ctx.lineWidth=on?2:1;ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.stroke();
+    drawIcon(ctx,"plugs",cx,cy,14,on);
+    if(bad){ctx.strokeStyle=C.coral;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(cx-8,cy+8);ctx.lineTo(cx+8,cy-8);ctx.stroke()}
+  }
+
+  /* ── solar / battery / grid summary ───────────────────── */
+  _solarVals(){const st=this._hass.states;const g=k=>{const s=st[SOLAR[k]];const v=s?parseFloat(s.state):NaN;return isNaN(v)?null:v};return{pv:g("pv"),soc:g("soc"),batt:g("batt"),imp:g("imp"),exp:g("exp"),load:g("load")}}
+  _drawSolarHud(ctx){
+    const v=this._solarVals();const kw=x=>x==null?"–":(Math.abs(x)<10?x.toFixed(2):x.toFixed(1))+" kW";
+    const grid=v.imp!=null&&v.exp!=null?(v.exp>v.imp?"Export "+kw(v.exp):"Import "+kw(v.imp)):"Grid –";
+    const rows=[["Solar",kw(v.pv),ELEM_COL.lights],["Battery",v.soc==null?"–":Math.round(v.soc)+"%"+(v.batt?" ("+(v.batt>0?"charging":"discharging")+")":""),C.green],["Grid",grid.replace(/^(Import|Export) /,"$1 "),C.amber],["Home",kw(v.load),C.textMid]];
+    const w=200,h=22+rows.length*20,x=this._cvW-w-16,y=60;
+    ctx.save();ctx.fillStyle=C.pillBg;ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(x,y,w,h,12);ctx.fill();ctx.stroke();
+    ctx.font=`600 13px ${C.font}`;ctx.textBaseline="middle";
+    rows.forEach((r,i)=>{const ry=y+22+i*20;ctx.textAlign="left";ctx.fillStyle=C.textMuted;ctx.fillText(r[0],x+14,ry);ctx.textAlign="right";ctx.fillStyle=r[2];ctx.fillText(r[1],x+w-14,ry)});
+    ctx.restore();
+  }
+
   /* ── lights ───────────────────────────────────────────── */
   _drawLights(ctx,f){for(const rm of f.rooms)for(const el of(rm.lights||[])){
-    const s=this._hass.states[el.entity_id];if(!s)continue;
+    const s=this._hass.states[el.entity_id];if(!s){const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);drawMissingEntity(ctx,cx,cy);continue;}
     const on=s.state==="on";
     const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
     if(on){
@@ -512,15 +866,21 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       grad.addColorStop(0.5,`rgba(${r},${g},${b},${alpha*0.4})`);
       grad.addColorStop(1,`rgba(${r},${g},${b},0)`);
       ctx.fillStyle=grad;ctx.beginPath();ctx.arc(cx,cy,rad,0,Math.PI*2);ctx.fill();
+      // Icon on top of glow
+      ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
+      ctx.strokeStyle=`rgba(${r},${g},${b},.5)`;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.stroke();
+      drawIcon(ctx,"lights",cx,cy,14,true);
     } else {
-      // Off light: small dim circle
-      ctx.beginPath();ctx.arc(cx,cy,4,0,Math.PI*2);ctx.fillStyle="rgba(100,100,100,.3)";ctx.fill();
+      // Off light: visible icon with muted styling
+      ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
+      ctx.strokeStyle=C.pillBorder;ctx.lineWidth=1;ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.stroke();
+      drawIcon(ctx,"lights",cx,cy,14,false);
     }
   }}
 
   /* ── heating ──────────────────────────────────────────── */
   _drawHeating(ctx,f){for(const rm of f.rooms)for(const el of(rm.climate||[])){
-    const s=this._hass.states[el.entity_id];if(!s)continue;
+    const s=this._hass.states[el.entity_id];if(!s){const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);drawMissingEntity(ctx,cx,cy);continue;}
     const active=s.state==="heat"&&s.attributes?.temperature>(s.attributes?.current_temperature||0);
     const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
     // Active radiator: warm red glow
@@ -530,19 +890,23 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       ctx.fillStyle=grad;ctx.beginPath();ctx.arc(cx,cy,30*this._scale/2,0,Math.PI*2);ctx.fill();
     }
     // Dark circle background
-    ctx.beginPath();ctx.arc(cx,cy,14,0,Math.PI*2);ctx.fillStyle="rgba(6,6,8,.7)";ctx.fill();
+    ctx.beginPath();ctx.arc(cx,cy,14,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
     drawIcon(ctx,"climate",cx,cy,16,active);
     const t=s.attributes?.temperature,c2=s.attributes?.current_temperature;
-    if(t!=null){ctx.font=`600 12px ${C.font}`;ctx.textAlign="left";ctx.textBaseline="middle";ctx.fillStyle=active?C.coral:C.textMuted;ctx.fillText(c2!=null?`${c2}\u2192${t}\u00b0`:`\u2192${t}\u00b0`,cx+18,cy)}
+    if(t!=null){ctx.font=`600 12px ${C.font}`;ctx.textAlign="left";ctx.textBaseline="middle";
+      const label=c2!=null?`${c2}\u2192${t}\u00b0`:`\u2192${t}\u00b0`;
+      const lw=ctx.measureText(label).width+8;const lx=cx+18;
+      ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(lx-4,cy-10,lw,20,4);ctx.fill();
+      ctx.fillStyle=active?C.coral:C.textMuted;ctx.fillText(label,lx,cy)}
   }}
 
   /* ── windows ──────────────────────────────────────────── */
   _drawWindows(ctx,f){for(const rm of f.rooms)for(const el of(rm.windows||[])){
-    const s=this._hass.states[el.entity_id];if(!s)continue;
+    const s=this._hass.states[el.entity_id];if(!s){const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);drawMissingEntity(ctx,cx,cy);continue;}
     const isOpen=s.state==="on";
     const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
     // Dark circle background
-    ctx.beginPath();ctx.arc(cx,cy,14,0,Math.PI*2);ctx.fillStyle="rgba(6,6,8,.7)";ctx.fill();
+    ctx.beginPath();ctx.arc(cx,cy,14,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
     if(isOpen){
       ctx.save();ctx.shadowColor="rgba(255,107,74,.3)";ctx.shadowBlur=12;
       drawIcon(ctx,"windows",cx,cy,18,true);
@@ -560,11 +924,11 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 
   /* ── occupancy ────────────────────────────────────────── */
   _drawOccupancy(ctx,f){for(const rm of f.rooms)for(const el of(rm.sensors?.occupancy||[])){
-    const s=this._hass.states[el.entity_id];if(!s)continue;
+    const s=this._hass.states[el.entity_id];if(!s){const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);drawMissingEntity(ctx,cx,cy);continue;}
     const on=s.state==="on"||parseFloat(s.state)>0;
     const[wx,wy]=this._elemWorld(rm,el);const[cx,cy]=this._toScreen(wx,wy);
     // Dark circle background
-    ctx.beginPath();ctx.arc(cx,cy,14,0,Math.PI*2);ctx.fillStyle="rgba(6,6,8,.7)";ctx.fill();
+    ctx.beginPath();ctx.arc(cx,cy,14,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
     if(on){
       // Glow halo
       const grad=ctx.createRadialGradient(cx,cy,0,cx,cy,26);
@@ -576,6 +940,84 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     }
   }}
 
+  /* ── radar targets ─────────────────────────────────────── */
+  _drawRadarTargets(ctx,f){
+    const FOV_DEG=120, FOV_RAD=FOV_DEG*Math.PI/180;
+    const MAX_RANGE_MM=6000; // LD2450 max usable range ~6m
+    for(const rm of f.rooms){
+      if(!rm.radar||!rm.radar.length)continue;
+      const b=rmBounds(rm);
+      for(const radar of rm.radar){
+        const prefix=radar.entity_prefix;if(!prefix)continue;
+        const maxT=radar.max_targets||3;
+        const rot=(radar.rotation||0)*Math.PI/180;
+        const cosR=Math.cos(rot),sinR=Math.sin(rot);
+        // Sensor world position
+        const sx=b.x+(radar.x||.5)*b.w, sy=b.y+(radar.y||0)*b.h;
+        const[scx,scy]=this._toScreen(sx,sy);
+        const range_u=MAX_RANGE_MM/1000*this._upm*this._scale;
+        const coneAngle=rot+Math.PI/2;
+        // Clip FOV cone to room boundaries
+        ctx.save();
+        ctx.beginPath();
+        for(const r of rmRects(rm)){const[rx,ry]=this._toScreen(r.x,r.y);ctx.rect(rx,ry,r.w*this._scale,r.h*this._scale)}
+        ctx.clip();
+        // Draw FOV cone
+        ctx.beginPath();
+        ctx.moveTo(scx,scy);
+        ctx.arc(scx,scy,range_u,coneAngle-FOV_RAD/2,coneAngle+FOV_RAD/2);
+        ctx.closePath();
+        const grad=ctx.createRadialGradient(scx,scy,0,scx,scy,range_u);
+        grad.addColorStop(0,"rgba(0,230,118,.12)");grad.addColorStop(1,"rgba(0,230,118,.02)");
+        ctx.fillStyle=grad;ctx.fill();
+        ctx.strokeStyle="rgba(0,230,118,.25)";ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+        // Draw targets
+        for(let t=1;t<=maxT;t++){
+          const xState=this._hass.states[`sensor.${prefix}_target_${t}_x`];
+          const yState=this._hass.states[`sensor.${prefix}_target_${t}_y`];
+          const dirState=this._hass.states[`sensor.${prefix}_target_${t}_direction`];
+          if(!xState||!yState)continue;
+          const tx_mm=parseFloat(xState.state),ty_mm=parseFloat(yState.state);
+          if(isNaN(tx_mm)||isNaN(ty_mm)||(tx_mm===0&&ty_mm===0))continue;
+          const dir=dirState?.state||"";
+          if(dir==="NA")continue;
+          // Convert mm to room units
+          const tx_u=tx_mm/1000*this._upm, ty_u=ty_mm/1000*this._upm;
+          // Apply rotation: default (0°) = sensor faces "down" on map (+Y)
+          const dx=tx_u*cosR+ty_u*sinR, dy=-tx_u*sinR+ty_u*cosR;
+          const wx=sx+dx, wy=sy+dy;
+          const[cx,cy]=this._toScreen(wx,wy);
+          // Match occupancy marker style: dark bg, glow halo, person icon
+          ctx.beginPath();ctx.arc(cx,cy,14,0,Math.PI*2);ctx.fillStyle=C.pillBg;ctx.fill();
+          const tGrad=ctx.createRadialGradient(cx,cy,0,cx,cy,26);
+          tGrad.addColorStop(0,"rgba(76,175,80,.2)");tGrad.addColorStop(1,"rgba(76,175,80,0)");
+          ctx.fillStyle=tGrad;ctx.beginPath();ctx.arc(cx,cy,26,0,Math.PI*2);ctx.fill();
+          drawIcon(ctx,"occupancy",cx,cy,18,true);
+        }
+      }
+    }
+  }
+
+  /* ── find radar devices for auto-detection ─────────────── */
+  _findRadarDevicesForArea(areaId){
+    if(!areaId||!this._deviceReg||!this._entityReg)return[];
+    const results=[];
+    // Find devices in this area that have target_*_x entities
+    const areaDevices=this._deviceReg.filter(d=>d.area_id===areaId);
+    for(const dev of areaDevices){
+      const targetXEntities=this._entityReg.filter(e=>e.device_id===dev.id&&e.entity_id.includes("_target_")&&e.entity_id.endsWith("_x"));
+      if(targetXEntities.length>0){
+        // Extract entity prefix: e.g. "sensor.apollo_mtr_1_c7c9fc_target_1_x" → "apollo_mtr_1_c7c9fc"
+        const eid=targetXEntities[0].entity_id;
+        const prefix=eid.replace(/^sensor\./,"").replace(/_target_\d+_x$/,"");
+        results.push({device_id:dev.id,entity_prefix:prefix,name:dev.name_by_user||dev.name,max_targets:targetXEntities.length});
+      }
+    }
+    return results;
+  }
+
   /* ── element markers (edit mode) ──────────────────────── */
   _drawElements(ctx,f){
     for(const rm of f.rooms){
@@ -586,22 +1028,26 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
         const sz=isSel?MARKER+4:MARKER;
         // background circle
         ctx.beginPath();ctx.arc(cx,cy,sz/2+4,0,Math.PI*2);
-        ctx.fillStyle=isSel?C.card:"rgba(6,6,8,.6)";ctx.fill();
+        ctx.fillStyle=isSel?C.card:C.pillBg;ctx.fill();
         ctx.strokeStyle=isSel?ELEM_COL[type]:"rgba(186,192,202,.3)";ctx.lineWidth=isSel?2:1;ctx.stroke();
         // icon
         drawIcon(ctx,type,cx,cy,sz,true);
-        // label with friendly name
-        const s=this._hass.states[el.entity_id];
-        const name=s?.attributes?.friendly_name||el.entity_id.split(".").pop();
-        const shortName=name.length>25?name.slice(0,22)+"...":name;
-        ctx.font=`500 10px ${C.font}`;ctx.textAlign="left";ctx.textBaseline="middle";
-        ctx.fillStyle=C.textMuted;
-        ctx.fillText(shortName,cx+sz/2+6,cy);
+        // label with friendly name (only for selected element)
+        if(isSel){
+          const s=this._hass.states[el.entity_id];
+          const name=s?.attributes?.friendly_name||el.entity_id.split(".").pop();
+          const shortName=name.length>25?name.slice(0,22)+"...":name;
+          ctx.font=`500 10px ${C.font}`;ctx.textAlign="left";ctx.textBaseline="middle";
+          const nlw=ctx.measureText(shortName).width+8;
+          ctx.fillStyle=C.pillBg;ctx.beginPath();ctx.roundRect(cx+sz/2+2,cy-8,nlw,16,3);ctx.fill();
+          ctx.fillStyle=C.textMuted;
+          ctx.fillText(shortName,cx+sz/2+6,cy);
+        }
       }
     }
   }
 
-  _allElems(rm){const out=[];for(const k of["temperature","humidity","occupancy"])for(let i=0;i<(rm.sensors?.[k]?.length||0);i++)out.push({type:k,index:i,el:rm.sensors[k][i],container:rm.sensors[k]});for(const k of["lights","climate","windows"])for(let i=0;i<(rm[k]?.length||0);i++)out.push({type:k,index:i,el:rm[k][i],container:rm[k]});return out}
+  _allElems(rm){const out=[];for(const k of["temperature","humidity","air_quality","occupancy"])for(let i=0;i<(rm.sensors?.[k]?.length||0);i++)out.push({type:k,index:i,el:rm.sensors[k][i],container:rm.sensors[k]});for(const k of["lights","plugs","climate","windows"])for(let i=0;i<(rm[k]?.length||0);i++)out.push({type:k,index:i,el:rm[k][i],container:rm[k]});for(let i=0;i<(rm.radar?.length||0);i++)out.push({type:"radar",index:i,el:rm.radar[i],container:rm.radar});return out}
 
   _drawHandles(ctx,rm){for(const h of this._getHandles(rm)){const[sx,sy]=this._toScreen(h.wx,h.wy);ctx.beginPath();ctx.arc(sx,sy,HANDLE/2+1,0,Math.PI*2);ctx.fillStyle=C.card;ctx.fill();ctx.strokeStyle=C.accent;ctx.lineWidth=2;ctx.stroke()}}
   _getHandles(rm){if(!rm)return[];const rs=rmRects(rm);const r=rs[this._selRect]||rs[0];if(!r)return[];const{x,y,w,h}=r;return[{wx:x,wy:y,cursor:"nw-resize",dx:-1,dy:-1},{wx:x+w/2,wy:y,cursor:"n-resize",dx:0,dy:-1},{wx:x+w,wy:y,cursor:"ne-resize",dx:1,dy:-1},{wx:x,wy:y+h/2,cursor:"w-resize",dx:-1,dy:0},{wx:x+w,wy:y+h/2,cursor:"e-resize",dx:1,dy:0},{wx:x,wy:y+h,cursor:"sw-resize",dx:-1,dy:1},{wx:x+w/2,wy:y+h,cursor:"s-resize",dx:0,dy:1},{wx:x+w,wy:y+h,cursor:"se-resize",dx:1,dy:1}]}
@@ -613,8 +1059,46 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
   _hitHandle(sx,sy){if(!this._selRoom)return null;for(const h of this._getHandles(this._selRoom)){const[hx,hy]=this._toScreen(h.wx,h.wy);if(Math.abs(sx-hx)<HANDLE+2&&Math.abs(sy-hy)<HANDLE+2)return h}return null}
   _hitElement(sx,sy,room){if(!room)return null;const hitR=MARKER+8;for(const item of this._allElems(room)){const[wx,wy]=this._elemWorld(room,item.el);const[ex,ey]=this._toScreen(wx,wy);if(Math.abs(sx-ex)<hitR&&Math.abs(sy-ey)<hitR)return item}return null}
 
+  /* ── view-mode hit testing for interactive elements ───── */
+  _hitViewElement(sx,sy,f){
+    const hitR=20;
+    for(const rm of f.rooms){
+      for(const type of["lights","plugs"]){if(type==="plugs"&&!this._layers.plugs)continue;if(type==="lights"&&!this._layers.lights)continue;
+        for(let i=0;i<(rm[type]||[]).length;i++){const el=rm[type][i];const[wx,wy]=this._elemWorld(rm,el);const[ex,ey]=this._toScreen(wx,wy);if(Math.abs(sx-ex)<hitR&&Math.abs(sy-ey)<hitR)return{type,el,room:rm,index:i,sx:ex,sy:ey}}}
+    }
+    return null;
+  }
+
+  /* ── entity popover (hover controls for lights) ──────── */
+  _showEntityPopover(hit){
+    const eid=hit.el.entity_id;const s=this._hass.states[eid];if(!s)return;
+    const domain=eid.split('.')[0];if(domain!=='light')return;
+    const modes=s.attributes?.supported_color_modes||[];
+    const hasBri=modes.some(m=>m!=='onoff');
+    const hasColor=modes.some(m=>['hs','rgb','xy','rgbw','rgbww'].includes(m));
+    const hasTemp=modes.includes('color_temp');
+    if(!hasBri&&!hasColor&&!hasTemp)return;
+    const ep=this._ep;
+    const x=Math.min(hit.sx+24,this._cvW-270);const y=Math.max(hit.sy-60,10);
+    ep.style.left=x+'px';ep.style.top=y+'px';ep.style.display='block';
+    if(this._popoverEntity===eid)return;
+    this._popoverEntity=eid;
+    const name=s.attributes?.friendly_name||eid.split('.').pop();
+    let html=`<div class="ep-name">${name}</div>`;
+    if(hasBri){const bri=s.attributes?.brightness||128;html+=`<div class="ep-label">Brightness</div><input type="range" id="ep-bri" min="1" max="255" value="${bri}">`}
+    if(hasColor){const rgb=s.attributes?.rgb_color||[255,255,255];const hex='#'+rgb.map(c=>c.toString(16).padStart(2,'0')).join('');html+=`<div class="ep-label">Color</div><input type="color" id="ep-color" value="${hex}">`}
+    if(hasTemp){const temp=s.attributes?.color_temp_kelvin||4000;const mn=s.attributes?.min_color_temp_kelvin||2000;const mx=s.attributes?.max_color_temp_kelvin||6500;html+=`<div class="ep-label">Color Temp</div><input type="range" id="ep-temp" min="${mn}" max="${mx}" value="${temp}">`}
+    ep.innerHTML=html;
+    const briEl=ep.querySelector('#ep-bri');if(briEl)briEl.addEventListener('input',()=>{this._hass.callService('light','turn_on',{entity_id:eid,brightness:parseInt(briEl.value)})});
+    const colorEl=ep.querySelector('#ep-color');if(colorEl)colorEl.addEventListener('input',()=>{const h=colorEl.value;this._hass.callService('light','turn_on',{entity_id:eid,rgb_color:[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]})});
+    const tempEl=ep.querySelector('#ep-temp');if(tempEl)tempEl.addEventListener('input',()=>{this._hass.callService('light','turn_on',{entity_id:eid,color_temp_kelvin:parseInt(tempEl.value)})});
+  }
+  _hideEntityPopover(){if(this._ep)this._ep.style.display='none';this._popoverEntity=null;this._popoverHideTimer=null}
+
   /* ── mouse ────────────────────────────────────────────── */
-  _onDown(e){this._cv.focus();const f=this._floor();if(!f)return;const[sx,sy]=this._canvasXY(e);const[wx,wy]=this._toWorld(sx,sy);
+  _onDown(e){this._cv.focus();const f=this._floor();if(!f)return;const[sx,sy]=this._canvasXY(e);
+    if(this._view3d){if(e.button!==0)return;const h=this._hit3(sx,sy);if(h){const eid=h.el.entity_id,d=eid.split('.')[0];if(d==='light'||d==='switch')this._hass.callService(d,'toggle',{entity_id:eid})}return}
+    const[wx,wy]=this._toWorld(sx,sy);
     // Middle-click or ctrl+left-click → pan
     if(e.button===1||(e.button===0&&e.ctrlKey&&!e.shiftKey)){
       e.preventDefault();this._action="pan";this._actionData={startSx:sx,startSy:sy,origPanX:this._panX,origPanY:this._panY};this._userZoom=true;return;
@@ -654,18 +1138,23 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       }
       this._action="draw";this._actionData={startWx:snap(wx),startWy:snap(wy),preview:null};return
     }
+    // View mode: click interactive elements to toggle
+    const viewHit=this._hitViewElement(sx,sy,f);
+    if(viewHit){const eid=viewHit.el.entity_id;const domain=eid.split('.')[0];if(domain==='light')this._hass.callService('light','toggle',{entity_id:eid});else if(domain==='switch')this._hass.callService('switch','toggle',{entity_id:eid});return}
     const room=this._hitRoom(wx,wy,f);if(room!==this._selRoom){this._selRoom=room;this._scheduleRender()}
   }
-  _onMove(e){const[sx,sy]=this._canvasXY(e);const[wx,wy]=this._toWorld(sx,sy);const f=this._floor();
+  _onMove(e){const[sx,sy]=this._canvasXY(e);
+    if(this._view3d){const h=this._hit3(sx,sy);if(h){this._cv.style.cursor="pointer";clearTimeout(this._popoverHideTimer);this._popoverHideTimer=null;if(h.type==="lights")this._showEntityPopover({el:h.el,sx:h.x,sy:h.y})}else{this._cv.style.cursor="default";if(this._popoverEntity&&!this._popoverHideTimer)this._popoverHideTimer=setTimeout(()=>this._hideEntityPopover(),300)}return}
+    const[wx,wy]=this._toWorld(sx,sy);const f=this._floor();
     if(this._action==="pan"){const d=this._actionData;this._panX=d.origPanX+(sx-d.startSx);this._panY=d.origPanY+(sy-d.startSy);this._hmCache=null;this._scheduleRender();return}
     if(this._action==="drag_elem"){const{elem,room}=this._actionData;const b=rmBounds(room);elem.el.x=clamp01((wx-b.x)/b.w);elem.el.y=clamp01((wy-b.y)/b.h);this._hmCache=null;this._scheduleRender();return}
     if(this._action==="move"){const d=this._actionData;const dx=snap(wx-d.startWx),dy=snap(wy-d.startWy);const rs=rmRects(this._selRoom);for(let i=0;i<rs.length;i++){rs[i].x=d.origRects[i].x+dx;rs[i].y=d.origRects[i].y+dy}this._hmCache=null;this._scheduleRender();return}
     if(this._action==="resize"){const{handle,startWx,startWy,orig,rectIdx}=this._actionData;const dw=wx-startWx,dh=wy-startWy;const r=rmRects(this._selRoom)[rectIdx];if(!r)return;if(handle.dx===-1){r.x=snap(orig.x+dw);r.w=snap(orig.w-dw)}if(handle.dx===1)r.w=snap(orig.w+dw);if(handle.dy===-1){r.y=snap(orig.y+dh);r.h=snap(orig.h-dh)}if(handle.dy===1)r.h=snap(orig.h+dh);if(r.w<MIN_ROOM)r.w=MIN_ROOM;if(r.h<MIN_ROOM)r.h=MIN_ROOM;this._hmCache=null;this._scheduleRender();return}
     if(this._action==="draw"||this._action==="draw_section"){const d=this._actionData;const ex=snap(wx),ey=snap(wy);d.preview={x:Math.min(d.startWx,ex),y:Math.min(d.startWy,ey),w:Math.abs(ex-d.startWx),h:Math.abs(ey-d.startWy)};this._scheduleRender();return}
-    if(this._editMode&&f){const h=this._hitHandle(sx,sy);if(h){this._cv.style.cursor=h.cursor;return}const hr=this._selRoom||this._hitRoom(wx,wy,f);if(hr&&this._hitElement(sx,sy,hr)){this._cv.style.cursor="grab";return}this._cv.style.cursor=this._hitRoom(wx,wy,f)?"move":"crosshair"}else this._cv.style.cursor="default"
+    if(this._editMode&&f){const h=this._hitHandle(sx,sy);if(h){this._cv.style.cursor=h.cursor;return}const hr=this._selRoom||this._hitRoom(wx,wy,f);if(hr&&this._hitElement(sx,sy,hr)){this._cv.style.cursor="grab";return}this._cv.style.cursor=this._hitRoom(wx,wy,f)?"move":"crosshair"}else{if(f){const vh=this._hitViewElement(sx,sy,f);if(vh){this._cv.style.cursor="pointer";clearTimeout(this._popoverHideTimer);this._popoverHideTimer=null;this._showEntityPopover(vh);return}}this._cv.style.cursor="default";if(this._popoverEntity&&!this._popoverHideTimer){this._popoverHideTimer=setTimeout(()=>this._hideEntityPopover(),300)}}
   }
   _onUp(){const f=this._floor();if(!f){this._action=null;return}
-    if(this._action==="draw"&&this._actionData.preview){const p=this._actionData.preview;if(p.w>=MIN_ROOM&&p.h>=MIN_ROOM){const rm={id:uid(),name:"New Room",rects:[{x:p.x,y:p.y,w:p.w,h:p.h}],area_id:null,sensors:{temperature:[],humidity:[],occupancy:[]},lights:[],climate:[],windows:[]};f.rooms.push(rm);this._selRoom=rm;this._selRect=0;this._selElem=null;this._renderSidebar()}}
+    if(this._action==="draw"&&this._actionData.preview){const p=this._actionData.preview;if(p.w>=MIN_ROOM&&p.h>=MIN_ROOM){const rm={id:uid(),name:"New Room",rects:[{x:p.x,y:p.y,w:p.w,h:p.h}],area_id:null,sensors:{temperature:[],humidity:[],air_quality:[],occupancy:[]},lights:[],plugs:[],climate:[],windows:[],radar:[]};f.rooms.push(rm);this._selRoom=rm;this._selRect=0;this._selElem=null;this._renderSidebar()}}
     if(this._action==="draw_section"&&this._actionData.preview&&this._selRoom){const p=this._actionData.preview;if(p.w>=MIN_ROOM&&p.h>=MIN_ROOM){if(!this._selRoom.rects)this._selRoom.rects=[{x:this._selRoom.x,y:this._selRoom.y,w:this._selRoom.w,h:this._selRoom.h}];this._selRoom.rects.push({x:p.x,y:p.y,w:p.w,h:p.h});this._selRect=this._selRoom.rects.length-1;this._renderSidebar()}}
     if(this._action){
       // Lock view after room interactions so auto-fit doesn't snap
@@ -684,11 +1173,12 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       // Add rects
       for(const r of rmRects(rm))base.rects.push({...r});
       // Merge sensors
-      for(const k of["temperature","humidity","occupancy"])
+      for(const k of["temperature","humidity","air_quality","occupancy"])
         for(const el of(rm.sensors?.[k]||[]))base.sensors[k].push({...el});
-      // Merge lights/climate/windows
-      for(const k of["lights","climate","windows"])
+      // Merge lights/climate/windows/radar
+      for(const k of["lights","plugs","climate","windows"])
         for(const el of(rm[k]||[]))base[k].push({...el});
+      for(const el of(rm.radar||[]))base.radar.push({...el});
       // Remove merged room from floor
       const idx=f.rooms.indexOf(rm);if(idx>=0)f.rooms.splice(idx,1);
     }
@@ -733,8 +1223,10 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     const secs=[
       {key:"temperature",label:"Temperature",cont:"sensors",domain:"sensor",suffix:"_temperature"},
       {key:"humidity",label:"Humidity",cont:"sensors",domain:"sensor",suffix:"_humidity"},
+      {key:"air_quality",label:"Air Quality",cont:"sensors",domain:"sensor",dcMatch:["aqi","volatile_organic_compounds","pm25","pm10","pm1","carbon_dioxide"]},
       {key:"occupancy",label:"Motion / Occupancy",cont:"sensors",domain:"binary_sensor",dcMatch:["occupancy","motion","presence"]},
       {key:"lights",label:"Lights",cont:"direct",domain:"light"},
+      {key:"plugs",label:"Smart plugs",cont:"direct",domain:"switch"},
       {key:"climate",label:"Radiators / Climate",cont:"direct",domain:"climate"},
       {key:"windows",label:"Windows / Doors",cont:"direct",domain:"binary_sensor",dcMatch:["door","window","opening"]},
     ];
@@ -743,22 +1235,39 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
     const available = this._getAreaEntities(rm.area_id);
     // Collect all entity_ids already added to this room
     const added = new Set();
-    for(const k of["temperature","humidity","occupancy"])for(const el of(rm.sensors?.[k]||[]))added.add(el.entity_id);
-    for(const k of["lights","climate","windows"])for(const el of(rm[k]||[]))added.add(el.entity_id);
+    for(const k of["temperature","humidity","air_quality","occupancy"])for(const el of(rm.sensors?.[k]||[]))added.add(el.entity_id);
+    for(const k of["lights","plugs","climate","windows"])for(const el of(rm[k]||[]))added.add(el.entity_id);
 
-    let html="";
+    // ── Search all entities (at the top for quick access) ──
+    let html=`<label style="margin-top:14px">Search all entities</label><input id="entity-search" placeholder="Type to search..." style="font-size:18px"><div id="search-results"></div>`;
+
     for(const sec of secs){
       const arr=sec.cont==="sensors"?(rm.sensors?.[sec.key]||[]):(rm[sec.key]||[]);
       const col=ELEM_COL[sec.key];
+      const isAQ=sec.key==="air_quality";
 
       // ── Added entities ──
-      html+=`<label style="margin-top:14px">${sec.label} <span style="opacity:.5">(${arr.length} on map)</span></label>`;
-      for(let i=0;i<arr.length;i++){
-        const el=arr[i];const s=this._hass.states[el.entity_id];
-        const name=s?.attributes?.friendly_name||el.entity_id;
-        const val=s?`${s.state}${s.attributes?.unit_of_measurement||""}`:"?";
-        const isSel=this._selElem?.type===sec.key&&this._selElem?.index===i;
-        html+=`<div class="er" style="${isSel?"background:rgba(3,169,244,.15)":""}"><span class="dot" style="background:${col}"></span><span class="eid" title="${el.entity_id}">${name}</span><span class="val">${val}</span><button class="rm" data-s="${sec.key}" data-c="${sec.cont}" data-i="${i}">&times;</button></div>`;
+      if(isAQ){
+        // Each entry is one anchor per device
+        html+=`<label style="margin-top:14px">${sec.label} <span style="opacity:.5">(${arr.length} device${arr.length!==1?"s":""})</span></label>`;
+        for(let i=0;i<arr.length;i++){
+          const el=arr[i];
+          const devId=el.device_id;
+          const dev=devId?this._deviceReg?.find(d=>d.id===devId):null;
+          const devName=dev?.name_by_user||dev?.name||el.entity_id;
+          const metrics=devId?this._aqDeviceMetrics(devId):[];
+          const isSel=this._selElem?.type===sec.key&&this._selElem?.index===i;
+          html+=`<div class="er" style="${isSel?"background:rgba(3,169,244,.15)":""}"><span class="dot" style="background:${col}"></span><span class="eid">${devName}</span><span class="val" style="font-size:11px;opacity:.6">${metrics.join(", ")}</span><button class="rm-aq-dev" data-i="${i}" style="cursor:pointer;color:${C.coral};font-size:22px;padding:0 6px;background:none;border:none">&times;</button></div>`;
+        }
+      }else{
+        html+=`<label style="margin-top:14px">${sec.label} <span style="opacity:.5">(${arr.length} on map)</span></label>`;
+        for(let i=0;i<arr.length;i++){
+          const el=arr[i];const s=this._hass.states[el.entity_id];
+          const name=s?.attributes?.friendly_name||el.entity_id;
+          const val=s?fmtVal(s.state,s.attributes?.unit_of_measurement||""):"?";
+          const isSel=this._selElem?.type===sec.key&&this._selElem?.index===i;
+          html+=`<div class="er" style="${isSel?"background:rgba(3,169,244,.15)":""}"><span class="dot" style="background:${col}"></span><span class="eid" title="${el.entity_id}">${name}</span><span class="val">${val}</span><button class="rm" data-s="${sec.key}" data-c="${sec.cont}" data-i="${i}">&times;</button></div>`;
+        }
       }
 
       // ── Available (not yet added) ──
@@ -775,15 +1284,53 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       });
 
       if(avail.length){
-        html+=`<div style="margin-top:4px;padding:4px 0;font-size:18px;color:#ccc">Available in area:</div>`;
-        for(const ae of avail){
-          const s=this._hass.states[ae.entity_id];
-          const name=s?.attributes?.friendly_name||ae.entity_id;
-          const val=s?`${s.state}${s.attributes?.unit_of_measurement||""}`:"";
-          html+=`<div class="er" draggable="true" data-drag-sec="${sec.key}" data-drag-cont="${sec.cont}" data-drag-eid="${ae.entity_id}" style="cursor:grab"><span class="dot" style="background:${col}"></span><span class="eid" title="${ae.entity_id}">${name}</span><span class="val">${val}</span><button class="add-btn" data-s="${sec.key}" data-c="${sec.cont}" data-eid="${ae.entity_id}" style="cursor:pointer;color:#4caf50;font-size:28px;padding:0 8px;background:none;border:none;font-weight:bold">+</button></div>`;
+        if(isAQ){
+          // Group available AQ sensors by device, exclude already-added devices
+          const addedDevIds=new Set(arr.map(e=>e.device_id).filter(Boolean));
+          const availDevs=new Map();
+          for(const ae of avail){
+            const re=this._entityReg?.find(e=>e.entity_id===ae.entity_id);
+            const did=re?.device_id||ae.entity_id;
+            if(addedDevIds.has(did))continue;
+            if(!availDevs.has(did))availDevs.set(did,{eids:[],firstEid:ae.entity_id});
+            availDevs.get(did).eids.push(ae.entity_id);
+          }
+          for(const[did,grp]of availDevs){
+            const dev=this._deviceReg?.find(d=>d.id===did);
+            const devName=dev?.name_by_user||dev?.name||did;
+            const metrics=grp.eids.map(eid=>{const dc=getDeviceClass(eid,this._entityReg,this._hass);const m=Object.values(AQ_METRICS).find(m=>m.dc.includes(dc));return m?m.label:dc}).filter(Boolean);
+            html+=`<div class="er" draggable="true" data-drag-sec="air_quality" data-drag-cont="sensors" data-drag-aq-devid="${did}" data-drag-aq-eid="${grp.firstEid}" style="cursor:grab"><span class="dot" style="background:${col}"></span><span class="eid">${devName}</span><span class="val" style="font-size:11px;opacity:.6">${metrics.join(", ")}</span><button class="add-aq-dev" data-devid="${did}" data-eid="${grp.firstEid}" style="cursor:pointer;color:#4caf50;font-size:28px;padding:0 8px;background:none;border:none;font-weight:bold">+</button></div>`;
+          }
+        }else{
+          for(const ae of avail){
+            const s=this._hass.states[ae.entity_id];
+            const name=s?.attributes?.friendly_name||ae.entity_id;
+            const val=s?fmtVal(s.state,s.attributes?.unit_of_measurement||""):"";
+            html+=`<div class="er" draggable="true" data-drag-sec="${sec.key}" data-drag-cont="${sec.cont}" data-drag-eid="${ae.entity_id}" style="cursor:grab"><span class="dot" style="background:${col}"></span><span class="eid" title="${ae.entity_id}">${name}</span><span class="val">${val}</span><button class="add-btn" data-s="${sec.key}" data-c="${sec.cont}" data-eid="${ae.entity_id}" style="cursor:pointer;color:#4caf50;font-size:28px;padding:0 8px;background:none;border:none;font-weight:bold">+</button></div>`;
+          }
         }
       }
 
+    }
+
+    // ── Radar sensors ──
+    const radarArr=rm.radar||[];
+    html+=`<label style="margin-top:14px">Radar Tracking <span style="opacity:.5">(${radarArr.length})</span></label>`;
+    for(let i=0;i<radarArr.length;i++){
+      const rd=radarArr[i];
+      const isSel=this._selElem?.type==="radar"&&this._selElem?.index===i;
+      html+=`<div class="er" style="${isSel?"background:rgba(3,169,244,.15)":""}"><span class="dot" style="background:#00E676"></span><span class="eid">${rd.name||rd.entity_prefix}</span><button class="rm-radar" data-i="${i}">&times;</button></div>`;
+      html+=`<div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;font-size:12px">`;
+      html+=`<label style="margin:0;flex:1">Rotation °<input type="number" min="0" max="359" step="1" value="${rd.rotation||0}" data-radar="${i}" data-field="rotation" class="radar-cfg" style="width:100%;padding:6px"></label>`;
+      html+=`<span style="color:${C.textMuted};font-size:11px">Drag marker to reposition</span>`;
+      html+=`</div>`;
+    }
+    // Auto-detect radar devices in this area
+    const availRadar=this._findRadarDevicesForArea(rm.area_id);
+    const addedPrefixes=new Set(radarArr.map(r=>r.entity_prefix));
+    for(const ar of availRadar){
+      if(addedPrefixes.has(ar.entity_prefix))continue;
+      html+=`<div class="er"><span class="dot" style="background:#00E676"></span><span class="eid">${ar.name}</span><button class="add-radar" data-prefix="${ar.entity_prefix}" data-devid="${ar.device_id}" data-name="${ar.name}" data-maxt="${ar.max_targets}" style="cursor:pointer;color:#4caf50;font-size:28px;padding:0 8px;background:none;border:none;font-weight:bold">+</button></div>`;
     }
 
     // ── "Other entities in area" — anything not matched by typed sections above ──
@@ -801,9 +1348,6 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       }
     }
 
-    // ── Search all entities (for things not in this area) ──
-    html+=`<label style="margin-top:14px">Search all entities</label><input id="entity-search" placeholder="Type to search..." style="font-size:18px"><div id="search-results"></div>`;
-
     c.innerHTML=html;
 
     // Remove buttons
@@ -812,19 +1356,56 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
       this._selElem=null;this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(rm);
     })});
 
-    // Add buttons (from available list)
+    // Add buttons (from available list — non-AQ)
     c.querySelectorAll(".add-btn").forEach(b=>{b.addEventListener("click",()=>{
       const{s,c:cont,eid}=b.dataset;
-      const dy=s==="windows"?0:s==="climate"?.95:s==="lights"?.3:.5;
+      const dy=s==="windows"?0:s==="climate"?.95:s==="lights"?.3:s==="plugs"?.12:.5;
       const arr=cont==="sensors"?rm.sensors[s]:rm[s];
       arr.push({entity_id:eid,x:.5,y:dy});
       this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(rm);
     })});
 
+    // Add AQ device (stores one anchor with device_id)
+    c.querySelectorAll(".add-aq-dev").forEach(b=>{b.addEventListener("click",()=>{
+      const devId=b.dataset.devid;const eid=b.dataset.eid;
+      if(!rm.sensors.air_quality)rm.sensors.air_quality=[];
+      if(!rm.sensors.air_quality.some(e=>e.device_id===devId)){
+        rm.sensors.air_quality.push({entity_id:eid,device_id:devId,x:.5,y:.5});
+      }
+      this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(rm);
+    })});
+
+    // Remove AQ device
+    c.querySelectorAll(".rm-aq-dev").forEach(b=>{b.addEventListener("click",()=>{
+      const idx=parseInt(b.dataset.i);
+      rm.sensors.air_quality.splice(idx,1);
+      this._selElem=null;this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(rm);
+    })});
+
     // Drag from sidebar to canvas
     c.querySelectorAll("[draggable=true]").forEach(row=>{row.addEventListener("dragstart",(e)=>{
-      e.dataTransfer.setData("text/plain",JSON.stringify({eid:row.dataset.dragEid,sec:row.dataset.dragSec,cont:row.dataset.dragCont}));
+      const payload={sec:row.dataset.dragSec,cont:row.dataset.dragCont};
+      if(row.dataset.dragAqDevid){payload.aqDevId=row.dataset.dragAqDevid;payload.aqEid=row.dataset.dragAqEid}
+      else payload.eid=row.dataset.dragEid;
+      e.dataTransfer.setData("text/plain",JSON.stringify(payload));
       e.dataTransfer.effectAllowed="copy";
+    })});
+
+    // Radar add/remove/config
+    c.querySelectorAll(".add-radar").forEach(b=>{b.addEventListener("click",()=>{
+      if(!rm.radar)rm.radar=[];
+      rm.radar.push({entity_prefix:b.dataset.prefix,device_id:b.dataset.devid,name:b.dataset.name,max_targets:parseInt(b.dataset.maxt)||3,x:.5,y:0,rotation:0});
+      this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(rm);
+    })});
+    c.querySelectorAll(".rm-radar").forEach(b=>{b.addEventListener("click",()=>{
+      rm.radar.splice(parseInt(b.dataset.i),1);
+      this._hmCache=null;this._debounceSave();this._scheduleRender();this._renderEL(rm);
+    })});
+    c.querySelectorAll(".radar-cfg").forEach(inp=>{inp.addEventListener("change",()=>{
+      const rd=rm.radar[parseInt(inp.dataset.radar)];if(!rd)return;
+      const val=parseFloat(inp.value);if(isNaN(val))return;
+      rd[inp.dataset.field]=val;
+      this._hmCache=null;this._debounceSave();this._scheduleRender();
     })});
 
     // Entity search
@@ -839,7 +1420,7 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
         return eid.toLowerCase().includes(q)||fn.includes(q);
       }).slice(0,15);
       searchResults.innerHTML=matches.map(([eid,s])=>{
-        const name=s.attributes?.friendly_name||eid;const val=`${s.state}${s.attributes?.unit_of_measurement||""}`;
+        const name=s.attributes?.friendly_name||eid;const val=fmtVal(s.state,s.attributes?.unit_of_measurement||"");
         return`<div class="er" draggable="true" data-drag-sec="lights" data-drag-cont="direct" data-drag-eid="${eid}" style="cursor:grab"><span class="dot" style="background:#888"></span><span class="eid" title="${eid}">${name}</span><span class="val">${val}</span><button class="add-btn" data-s="lights" data-c="direct" data-eid="${eid}" style="cursor:pointer;color:#4caf50;font-size:28px;padding:0 8px;background:none;border:none;font-weight:bold">+</button></div>`;
       }).join("");
       // Wire up the dynamically added buttons
@@ -855,6 +1436,40 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 
   }
 
+  /* ── resolve AQ anchor to the entity matching the selected metric ── */
+  _resolveAqEntity(anchor){
+    const devId=anchor.device_id;
+    if(!devId)return anchor.entity_id;
+    if(!this._aqCache)this._aqCache={};
+    const ck=devId+"|"+this._aqMetric;if(ck in this._aqCache)return this._aqCache[ck];
+    const r=this._resolveAqUncached(anchor,devId);this._aqCache[ck]=r;return r;
+  }
+  _resolveAqUncached(anchor,devId){
+    const m=AQ_METRICS[this._aqMetric];if(!m)return anchor.entity_id;
+    const dcSet=new Set(m.dc);
+    const match=this._entityReg?.find(e=>{
+      if(e.device_id!==devId||!e.entity_id.startsWith("sensor."))return false;
+      const dc=e.original_device_class||e.device_class||this._hass?.states[e.entity_id]?.attributes?.device_class||"";
+      return dcSet.has(dc)||(m.re&&m.re.test(e.entity_id));
+    });
+    return match?match.entity_id:null;
+  }
+
+  /* ── get all AQ device_classes available for an anchor ── */
+  _aqDeviceMetrics(devId){
+    if(!devId)return[];
+    const allDcs=new Set();for(const m of Object.values(AQ_METRICS))for(const d of m.dc)allDcs.add(d);
+    const labels=[];
+    for(const e of(this._entityReg||[])){
+      if(e.device_id!==devId)continue;
+      const dc=e.original_device_class||e.device_class||this._hass?.states[e.entity_id]?.attributes?.device_class||"";
+      if(!allDcs.has(dc))continue;
+      const m=Object.values(AQ_METRICS).find(m=>m.dc.includes(dc));
+      if(m&&!labels.includes(m.label))labels.push(m.label);
+    }
+    return labels;
+  }
+
   /* ── get entities in an area ─────────────────────────────── */
   _getAreaEntities(areaId){
     if(!areaId)return[];
@@ -865,5 +1480,5 @@ canvas{flex:1;display:block;cursor:default;min-width:0}
 }
 // Store latest buildDom on window so existing elements can pick it up
 window.__homeMapBuildDom = HomeMapPanel.prototype._buildDom;
-window.__homeMapV = 24;
+window.__homeMapV = 35;
 if(!customElements.get("home-map-panel")) customElements.define("home-map-panel",HomeMapPanel);
