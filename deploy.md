@@ -7,8 +7,7 @@ Merging to main deploys. `.github/workflows/deploy.yml` reaches netcup, where
 2. Compares every file in `custom_components/home_map` with the live copy on HA
    (`ssh ha-host`) and copies only what changed, backing up the old files to
    `/config/backups/deploy-*-home_map-<sha>/`.
-3. A panel-only change reloads the integration (through ha-gate, with the
-   reason in HA's logbook). A Python or manifest change restarts HA core and
+3. A panel-only change reloads the integration. A Python or manifest change restarts HA core and
    checks `home_map` is loaded again.
 4. If the config check or restart fails, the old files are put back.
 
