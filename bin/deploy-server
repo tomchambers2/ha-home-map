@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Deploy the home_map integration to Home Assistant from a clean copy of main.
+# Run by portfolio/bin/app-deploy on netcup, which GitHub Actions reaches on
+# every merge. Compares each file with what is live and only copies what
+# changed (backing up the old ones); Python/manifest changes restart HA core,
+# panel-only changes reload the integration. Puts the old files back if the
+# config check or the restart fails.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+SHA=$(git rev-parse --short HEAD)
+GATE=http://127.0.0.1:8124
+GATE_KEY=$(cat "$HOME/ha-gate/deploy.key")
+gate_get() { curl -fsS -m 20 -H "Authorization: Bearer $GATE_KEY" "$GATE/api/$1"; }
+gate_post() {
+  curl -fsS -m 60 -X POST -H "Authorization: Bearer $GATE_KEY" -H "Content-Type: application/json" \
+    -H "X-Why: $2" -H "X-Chat: ha-home-map deploy $SHA" "$GATE/api/$1" -d '{}'
+}
+
+python3 -m py_compile custom_components/home_map/*.py
+node --check custom_components/home_map/panel.js
+
+mapfile -t FILES < <(git ls-files custom_components/home_map | grep -v -E '\.bak|\.md$')
+declare -A LIVE
+while read -r sum path; do LIVE["$path"]=$sum; done < <(
+  printf '%s\n' "${FILES[@]}" | ssh ha-host 'cd /config && while read -r f; do [ -f "$f" ] && sha256sum "$f"; done' || true
+)
+CHANGED=()
+for f in "${FILES[@]}"; do
+  [ "${LIVE[$f]:-}" = "$(sha256sum "$f" | cut -d' ' -f1)" ] || CHANGED+=("$f")
+done
+if [ ${#CHANGED[@]} -eq 0 ]; then echo "home_map up to date"; exit 0; fi
+printf 'changed: %s\n' "${CHANGED[@]}"
+
+BK="/config/backups/deploy-$(date -u +%Y%m%d-%H%M%S)-home_map-$SHA"
+for f in "${CHANGED[@]}"; do
+  ssh -n ha-host "mkdir -p '$BK/$(dirname "$f")' && if [ -f '/config/$f' ]; then cp -p '/config/$f' '$BK/$f'; else touch '$BK/$f.new'; fi"
+done
+restore() {
+  echo "putting the previous files back from $BK" >&2
+  ssh -n ha-host "cd '$BK' && find . -type f ! -name '*.new' | while read -r f; do cp -p \"\$f\" \"/config/\$f\"; done; find . -name '*.new' | while read -r f; do rm -f \"/config/\${f%.new}\"; done"
+}
+for f in "${CHANGED[@]}"; do
+  want=$(sha256sum "$f" | cut -d' ' -f1)
+  base64 -w0 "$f" | ssh ha-host "mkdir -p '/config/$(dirname "$f")' && base64 -d > '/config/$f.staged'"
+  [ "$(ssh -n ha-host "sha256sum '/config/$f.staged'" | cut -d' ' -f1)" = "$want" ] || { echo "upload of $f corrupted" >&2; restore; exit 1; }
+done
+for f in "${CHANGED[@]}"; do ssh -n ha-host "mv '/config/$f.staged' '/config/$f'"; done
+
+RESTART=0
+for f in "${CHANGED[@]}"; do case "$f" in *.js) ;; *) RESTART=1 ;; esac; done
+if [ "$RESTART" = 1 ]; then
+  ssh -n ha-host 'ha core check' || { restore; exit 1; }
+  echo "restarting Home Assistant for changed integration code"
+  ssh -n ha-host 'ha core restart' || true
+  up=0
+  for _ in $(seq 1 60); do sleep 5; gate_get config 2>/dev/null | grep -q '"state": *"RUNNING"' && { up=1; break; }; done
+  [ "$up" = 1 ] || { restore; ssh -n ha-host 'ha core restart' || true; exit 1; }
+  sleep 30
+  state=$(gate_get config/config_entries/entry | python3 -c 'import json,sys; print(" ".join(e["state"] for e in json.load(sys.stdin) if e["domain"]=="home_map"))')
+  [ "$state" = loaded ] || { echo "home_map not loaded after deploy: $state" >&2; restore; ssh -n ha-host 'ha core restart' || true; exit 1; }
+else
+  for id in $(gate_get config/config_entries/entry | python3 -c 'import json,sys; print(" ".join(e["entry_id"] for e in json.load(sys.stdin) if e["domain"]=="home_map"))'); do
+    gate_post "config/config_entries/entry/$id/reload" "ha-home-map deploy $SHA: reload so the new panel is served" >/dev/null
+  done
+fi
+echo "home_map deployed (${#CHANGED[@]} files)"

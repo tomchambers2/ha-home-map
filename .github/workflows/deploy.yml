@@ -1,0 +1,30 @@
+# Deploys home_map to Home Assistant on every merge to main. The key can only
+# run portfolio/bin/app-deploy on netcup, which checks out main into
+# ~/deploy-src/ha-home-map and runs bin/deploy-server there. Secret set with
+# `bin/ship-setup ha-home-map server`.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  netcup:
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 30
+    steps:
+      - name: Deploy
+        env:
+          KEY: ${{ secrets.HETZNER_DEPLOY_KEY }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/key"
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/key"
+          echo "152.53.23.218 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFb/Pb86w8tbwjfMDgQm4C/uBBSovxv8fK4wexYbAzhK" > "$RUNNER_TEMP/known_hosts"
+          ssh -i "$RUNNER_TEMP/key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o IdentitiesOnly=yes \
+            claude-dev@152.53.23.218 "${GITHUB_REPOSITORY#*/}"
