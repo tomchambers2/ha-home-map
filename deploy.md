@@ -1,10 +1,16 @@
 # Deploying ha-home-map to Home Assistant
 
-The live copy is `/config/custom_components/home_map/panel.js` on the Home Assistant host (`ssh ha-host`).
-Always pull the live file first and diff it against the repo — the live file has been ahead of the repo before. Never overwrite blindly.
+Merging to main deploys. `.github/workflows/deploy.yml` reaches netcup, where
+`portfolio/bin/app-deploy` checks out main and runs `bin/deploy-server`:
 
-1. `ssh ha-host 'cat /config/custom_components/home_map/panel.js' | diff - custom_components/home_map/panel.js` — any unexpected difference means commit the live file into the repo first.
-2. Back up: `ssh ha-host 'cp /config/custom_components/home_map/panel.js /config/custom_components/home_map/panel.js.bak.$(date +%Y%m%d%H%M)'`
-3. Copy the JS only: `ssh ha-host 'cat > /config/custom_components/home_map/panel.js' < custom_components/home_map/panel.js` (no HA restart needed).
-4. Hard-refresh the panel in the browser.
-5. Check with Playwright that the panel renders in light and dark themes (about 1344x952 canvas, no console errors).
+1. Checks the Python compiles and `panel.js` parses.
+2. Compares every file in `custom_components/home_map` with the live copy on HA
+   (`ssh ha-host`) and copies only what changed, backing up the old files to
+   `/config/backups/deploy-*-home_map-<sha>/`.
+3. A panel-only change reloads the integration (through ha-gate, with the
+   reason in HA's logbook). A Python or manifest change restarts HA core and
+   checks `home_map` is loaded again.
+4. If the config check or restart fails, the old files are put back.
+
+After a deploy, check the panel renders in light and dark themes (about
+1344x952 canvas at 1600x1100, no console errors).
