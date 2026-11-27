@@ -8,13 +8,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SHA=$(git rev-parse --short HEAD)
-GATE=http://127.0.0.1:8124
-GATE_KEY=$(cat "$HOME/ha-gate/deploy.key")
-gate_get() { curl -fsS -m 20 -H "Authorization: Bearer $GATE_KEY" "$GATE/api/$1"; }
-gate_post() {
-  curl -fsS -m 60 -X POST -H "Authorization: Bearer $GATE_KEY" -H "Content-Type: application/json" \
-    -H "X-Why: $2" -H "X-Chat: ha-home-map deploy $SHA" "$GATE/api/$1" -d '{}'
-}
+# Home Assistant as the "Agent" user (HA_URL / HA_TOKEN from the agents' env).
+HA_URL=$(grep -oP '^HA_URL=\K.*' "$HOME/portfolio/.env")
+HA_TOKEN=$(grep -oP '^HA_TOKEN=\K.*' "$HOME/portfolio/.env")
+ha_get() { curl -fsS -m 20 -H "Authorization: Bearer $HA_TOKEN" "$HA_URL/api/$1"; }
+ha_post() { curl -fsS -m 60 -X POST -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" "$HA_URL/api/$1" -d '{}'; }
 
 python3 -m py_compile custom_components/home_map/*.py
 node --check custom_components/home_map/panel.js
@@ -53,14 +51,14 @@ if [ "$RESTART" = 1 ]; then
   echo "restarting Home Assistant for changed integration code"
   ssh -n ha-host 'ha core restart' || true
   up=0
-  for _ in $(seq 1 60); do sleep 5; gate_get config 2>/dev/null | grep -q '"state": *"RUNNING"' && { up=1; break; }; done
+  for _ in $(seq 1 60); do sleep 5; ha_get config 2>/dev/null | grep -q '"state": *"RUNNING"' && { up=1; break; }; done
   [ "$up" = 1 ] || { restore; ssh -n ha-host 'ha core restart' || true; exit 1; }
   sleep 30
-  state=$(gate_get config/config_entries/entry | python3 -c 'import json,sys; print(" ".join(e["state"] for e in json.load(sys.stdin) if e["domain"]=="home_map"))')
+  state=$(ha_get config/config_entries/entry | python3 -c 'import json,sys; print(" ".join(e["state"] for e in json.load(sys.stdin) if e["domain"]=="home_map"))')
   [ "$state" = loaded ] || { echo "home_map not loaded after deploy: $state" >&2; restore; ssh -n ha-host 'ha core restart' || true; exit 1; }
 else
-  for id in $(gate_get config/config_entries/entry | python3 -c 'import json,sys; print(" ".join(e["entry_id"] for e in json.load(sys.stdin) if e["domain"]=="home_map"))'); do
-    gate_post "config/config_entries/entry/$id/reload" "ha-home-map deploy $SHA: reload so the new panel is served" >/dev/null
+  for id in $(ha_get config/config_entries/entry | python3 -c 'import json,sys; print(" ".join(e["entry_id"] for e in json.load(sys.stdin) if e["domain"]=="home_map"))'); do
+    ha_post "config/config_entries/entry/$id/reload" >/dev/null
   done
 fi
 echo "home_map deployed (${#CHANGED[@]} files)"
